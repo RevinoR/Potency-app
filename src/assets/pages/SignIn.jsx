@@ -57,8 +57,15 @@ const SignIn = () => {
 
           <p className="text-center text-gray-500 mt-6">
             Don't have an account?{' '}
-            <Link to="/signup" className="text-gray-700 font-bold">
+            <Link to="/signup" className="text-gray-700 font-bold hover:underline">
               click here
+            </Link>
+          </p>
+
+          {/* Go Back Button */}
+          <p className="text-center mt-2">
+            <Link to="/" className="text-gray-700">
+              Back to Home
             </Link>
           </p>
         </div>

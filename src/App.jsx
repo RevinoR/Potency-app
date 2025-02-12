@@ -5,6 +5,7 @@ import Footer from './assets/components/Footer'
 import LandingPage from './assets/pages/LandingPage'
 import About from './assets/pages/About'
 import SignIn from './assets/pages/SignIn'
+import SignUp from './assets/pages/SignUp'
 
 function App() {
   return (
@@ -30,6 +31,7 @@ function App() {
 
         {/* Routes without Navbar and Footer */}
         <Route path="/signin" element={<SignIn />} />
+        <Route path="/signup" element={<SignUp />} />
       </Routes>
     </BrowserRouter>
   )
