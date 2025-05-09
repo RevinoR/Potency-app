@@ -9,7 +9,7 @@ const Footer = () => {
             <p className="text-sm text-gray-400 max-w-md">
               Lorem ipsum dolor amet, consectetur adipiscing elit.
             </p>
-            <button className="mt-4 border border-white px-6 py-2 text-sm hover:bg-white hover:text-black">
+            <button className="mt-4 border border-white px-6 py-2 text-sm hover:bg-white hover:text-black hover:cursor-pointer">
               Contact us
             </button>
           </div>
@@ -24,7 +24,7 @@ const Footer = () => {
           {/* Bottom Footer */}
           <div className="border-t border-gray-800 pt-8">
             <div className="flex justify-between items-center">
-              <h2 className="font-bold text-3xl">POTENCY BIKE.</h2>
+              <h2 className="font-bold text-3xl">UNLOCK YOUR POTENTIAL.</h2>
               <p className="text-sm text-gray-400">© 2025 Revino Redison</p>
             </div>
           </div>

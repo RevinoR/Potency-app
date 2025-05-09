@@ -19,7 +19,7 @@ const LandingPage = () => {
                 backgroundPosition: 'right center',
                 backgroundSize: 'contain',
                 backgroundRepeat: 'no-repeat',
-                opacity: '0.9',
+                opacity: '1',
                 }}
             />
           <div className="relative z-10 w-full">
@@ -29,7 +29,7 @@ const LandingPage = () => {
       <p className="text-gray-600 mb-8 text-base md:text-lg">
         Lorem ipsum dolor amet, consectetur adipiscing elit. Cursus at duis elementum eu egestas.
       </p>
-      <button className="bg-amber-500 text-white px-8 py-3 hover:bg-gray-800">
+      <button className="bg-amber-500 text-white px-8 py-3 hover:bg-gray-800 hover:cursor-pointer">
         VIEW PRODUCT
       </button>
     </div>
