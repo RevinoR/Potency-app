@@ -18,13 +18,13 @@
 
 @font-face {
   font-family: "Terano";
-  src: url("/public/fonts/Terano\ Regular.ttf") format("truetype");
+  src: url("/fonts/Terano Regular.ttf") format("truetype");
   font-weight: 400;
 }
 
 @font-face {
   font-family: "Terano";
-  src: url("/public/fonts/Terano\ Bold.ttf") format("truetype");
+  src: url("/fonts/Terano Bold.ttf") format("truetype");
   font-weight: 700;
 }
 
