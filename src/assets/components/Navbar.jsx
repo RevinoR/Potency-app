@@ -1,5 +1,12 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import React, { useState, useEffect } from "react";
+import React, {
+  useState,
+  useEffect,
+  forwardRef,
+  useImperativeHandle,
+  useCallback,
+  useRef,
+} from "react";
 import useScrollPosition from "./ScrollDetection";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
@@ -11,7 +18,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import axios from "axios";
 
-const Navbar = ({ onCartClick }) => {
+const Navbar = forwardRef(({ onCartClick }, ref) => {
   const [isVisible, setIsVisible] = useState(true);
   const [user, setUser] = useState(null);
   const [cartCount, setCartCount] = useState(0);
@@ -20,14 +27,100 @@ const Navbar = ({ onCartClick }) => {
   const { scrollDirection, scrollY, isBlurActive } = useScrollPosition();
   const location = useLocation();
   const navigate = useNavigate();
+  const retryTimeoutRef = useRef(null);
+  const [isOffline, setIsOffline] = useState(false);
+
+  // Monitor network status
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  // Fetch cart count function with retry and error handling
+  const fetchCartCount = useCallback(async (retryCount = 0) => {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+
+    // Clear any existing retry timeout
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+
+    try {
+      setCartLoading(true);
+
+      // Use a timeout to prevent hanging requests
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+      const response = await axios.get("/api/cart", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        signal: controller.signal,
+        // Use baseURL configuration to ensure proper URL
+        baseURL: window.location.origin,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.data && response.data.success && response.data.data) {
+        setCartCount(response.data.data.items.length);
+        setIsOffline(false); // Successfully connected
+      }
+    } catch (error) {
+      console.error("Error fetching cart:", error);
+
+      // Only retry on network errors, not auth errors
+      if (error.code === "ERR_NETWORK" && retryCount < 2 && navigator.onLine) {
+        const nextRetry = Math.min(2000 * (retryCount + 1), 10000); // Exponential backoff
+        console.log(`Retrying cart fetch in ${nextRetry / 1000}s...`);
+
+        // Set up retry with exponential backoff
+        retryTimeoutRef.current = setTimeout(() => {
+          fetchCartCount(retryCount + 1);
+        }, nextRetry);
+      }
+
+      // Set offline status for network errors
+      if (error.code === "ERR_NETWORK") {
+        setIsOffline(true);
+      }
+
+      // Don't reset cart count on error to prevent flashing
+    } finally {
+      setCartLoading(false);
+    }
+  }, []); // No dependencies to avoid recreation
+
+  // Expose refreshCartCount method to parent components
+  useImperativeHandle(ref, () => ({
+    refreshCartCount: () => fetchCartCount(0),
+  }));
 
   // Check if user is logged in and get cart count
   useEffect(() => {
     const checkUserLoggedIn = () => {
       const storedUser = localStorage.getItem("user");
       if (storedUser) {
-        setUser(JSON.parse(storedUser));
-        fetchCartCount();
+        try {
+          setUser(JSON.parse(storedUser));
+          fetchCartCount(0);
+        } catch (e) {
+          console.error("Error parsing user data:", e);
+          // Handle corrupted localStorage
+          localStorage.removeItem("user");
+          setUser(null);
+        }
       } else {
         setUser(null);
         setCartCount(0);
@@ -36,33 +129,33 @@ const Navbar = ({ onCartClick }) => {
 
     checkUserLoggedIn();
 
+    // Periodically refresh cart count, but only when online
+    const refreshInterval = setInterval(() => {
+      if (user && navigator.onLine && !isOffline) {
+        fetchCartCount(0);
+      }
+    }, 30000); // Refresh every 30 seconds when user is logged in
+
     // Optional: add event listener to detect login/logout from other tabs
     window.addEventListener("storage", checkUserLoggedIn);
-    return () => window.removeEventListener("storage", checkUserLoggedIn);
-  }, []);
 
-  // Fetch cart count
-  const fetchCartCount = async () => {
-    const token = localStorage.getItem("token");
-    if (!token) return;
+    return () => {
+      window.removeEventListener("storage", checkUserLoggedIn);
+      clearInterval(refreshInterval);
 
-    try {
-      setCartLoading(true);
-      const response = await axios.get("/api/cart", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (response.data.success && response.data.data) {
-        setCartCount(response.data.data.items.length);
+      // Clear any pending retry timeout
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
       }
-    } catch (error) {
-      console.error("Error fetching cart:", error);
-    } finally {
-      setCartLoading(false);
+    };
+  }, [user, fetchCartCount, isOffline]);
+
+  // Also refetch cart when coming back online
+  useEffect(() => {
+    if (!isOffline && user) {
+      fetchCartCount(0);
     }
-  };
+  }, [isOffline, user, fetchCartCount]);
 
   // Handle navbar visibility based on scroll
   useEffect(() => {
@@ -233,7 +326,7 @@ const Navbar = ({ onCartClick }) => {
               aria-label="Shopping Cart"
             >
               <FontAwesomeIcon icon={faShoppingBag} size="lg" />
-              {cartCount > 0 && (
+              {cartCount > 0 && !isOffline && (
                 <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-xs w-5 h-5 flex items-center justify-center rounded-full">
                   {cartCount}
                 </span>
@@ -242,6 +335,11 @@ const Navbar = ({ onCartClick }) => {
                 <span className="absolute top-0 right-0 w-3 h-3">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+                </span>
+              )}
+              {isOffline && user && (
+                <span className="absolute -top-1 -right-1 bg-gray-400 text-white text-xs w-5 h-5 flex items-center justify-center rounded-full">
+                  ?
                 </span>
               )}
             </button>
@@ -354,13 +452,26 @@ const Navbar = ({ onCartClick }) => {
               }}
             >
               <FontAwesomeIcon icon={faShoppingBag} />
-              <span>View Cart {cartCount > 0 && `(${cartCount})`}</span>
+              <span>
+                View Cart {!isOffline && cartCount > 0 && `(${cartCount})`}
+                {isOffline && user && "(?)"}
+              </span>
             </button>
+
+            {isOffline && user && (
+              <div className="mt-4 text-sm text-amber-600 bg-amber-50 p-3 rounded-md">
+                You appear to be offline or the server is unreachable. Some
+                features may be limited.
+              </div>
+            )}
           </div>
         </div>
       </div>
     </>
   );
-};
+});
+
+// Add display name for better debugging
+Navbar.displayName = "Navbar";
 
 export default Navbar;

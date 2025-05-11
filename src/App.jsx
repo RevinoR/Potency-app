@@ -1,5 +1,6 @@
+// Update the useEffect for cart handling in App.jsx
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import ScrollToTop from "./assets/components/ScrollToTop";
 import Navbar from "./assets/components/Navbar";
 import Footer from "./assets/components/Footer";
@@ -19,6 +20,7 @@ function App() {
   const [showCheckout, setShowCheckout] = useState(false);
   const [orderData, setOrderData] = useState(null);
   const [showOrderConfirmation, setShowOrderConfirmation] = useState(false);
+  const navbarRef = useRef(null);
 
   // Handle cart toggle
   const toggleCart = () => {
@@ -38,6 +40,9 @@ function App() {
     setOrderData(data);
     setShowCheckout(false);
     setShowOrderConfirmation(true);
+
+    // Refresh cart count after order completion
+    refreshCartCount();
   };
 
   // Handle back button from checkout
@@ -53,6 +58,13 @@ function App() {
     setShowOrderConfirmation(false);
   };
 
+  // Helper function to refresh cart count
+  const refreshCartCount = () => {
+    if (navbarRef.current && navbarRef.current.refreshCartCount) {
+      navbarRef.current.refreshCartCount();
+    }
+  };
+
   return (
     <BrowserRouter>
       <ScrollToTop />
@@ -62,6 +74,7 @@ function App() {
         <Cart
           onClose={toggleCart}
           onProceedToCheckout={handleProceedToCheckout}
+          onCartUpdated={refreshCartCount}
         />
       )}
 
@@ -84,8 +97,11 @@ function App() {
           path="/"
           element={
             <>
-              <Navbar onCartClick={toggleCart} />
-              <LandingPage />
+              <Navbar ref={navbarRef} onCartClick={toggleCart} />
+              <LandingPage
+                onCartClick={toggleCart}
+                refreshCartCount={refreshCartCount}
+              />
               <Footer />
             </>
           }
@@ -94,7 +110,7 @@ function App() {
           path="/about"
           element={
             <>
-              <Navbar onCartClick={toggleCart} />
+              <Navbar ref={navbarRef} onCartClick={toggleCart} />
               <About />
               <Footer />
             </>
@@ -104,8 +120,8 @@ function App() {
           path="/products"
           element={
             <>
-              <Navbar onCartClick={toggleCart} />
-              <Products />
+              <Navbar ref={navbarRef} onCartClick={toggleCart} />
+              <Products refreshCartCount={refreshCartCount} />
               <Footer />
             </>
           }

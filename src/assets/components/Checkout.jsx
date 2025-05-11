@@ -6,6 +6,7 @@ import {
   faMoneyBill,
   faTruck,
 } from "@fortawesome/free-solid-svg-icons";
+import { faPaypal } from "@fortawesome/free-brands-svg-icons";
 import axios from "axios";
 
 const Checkout = ({ onBack, onOrderComplete }) => {

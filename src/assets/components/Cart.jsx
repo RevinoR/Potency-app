@@ -8,7 +8,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import axios from "axios";
 
-const Cart = ({ onClose, onProceedToCheckout }) => {
+const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
   const [cart, setCart] = useState({
     items: [],
     summary: { subtotal: 0, tax: 0, total: 0, itemCount: 0 },
@@ -45,6 +45,11 @@ const Cart = ({ onClose, onProceedToCheckout }) => {
       });
 
       setCart(response.data.data);
+
+      // Notify parent component to update cart count
+      if (onCartUpdated) {
+        onCartUpdated();
+      }
     } catch (err) {
       console.error("Error fetching cart:", err);
       setError(err.response?.data?.message || "Failed to load cart");
@@ -72,6 +77,11 @@ const Cart = ({ onClose, onProceedToCheckout }) => {
       );
 
       fetchCart(); // Refresh cart data
+
+      // Notify parent component to update cart count
+      if (onCartUpdated) {
+        onCartUpdated();
+      }
     } catch (err) {
       console.error("Error updating quantity:", err);
       setError(err.response?.data?.message || "Failed to update quantity");
@@ -91,6 +101,11 @@ const Cart = ({ onClose, onProceedToCheckout }) => {
       });
 
       fetchCart(); // Refresh cart data
+
+      // Notify parent component to update cart count
+      if (onCartUpdated) {
+        onCartUpdated();
+      }
     } catch (err) {
       console.error("Error removing item:", err);
       setError(err.response?.data?.message || "Failed to remove item");
@@ -110,6 +125,11 @@ const Cart = ({ onClose, onProceedToCheckout }) => {
       });
 
       fetchCart(); // Refresh cart data
+
+      // Notify parent component to update cart count
+      if (onCartUpdated) {
+        onCartUpdated();
+      }
     } catch (err) {
       console.error("Error clearing cart:", err);
       setError(err.response?.data?.message || "Failed to clear cart");

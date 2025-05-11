@@ -9,7 +9,7 @@ import {
   faChevronRight,
   faBicycle, // For bicycles
   faTshirt, // For clothing
-  faHeadSideMask, // For accessories/helmets
+  faHardHat, // Replacement for faHeadSideMask which doesn't exist
 } from "@fortawesome/free-solid-svg-icons";
 import axios from "axios";
 
@@ -65,13 +65,13 @@ const getProductIcon = (type) => {
     case "clothing":
       return faTshirt;
     case "accessory":
-      return faHeadSideMask;
+      return faHardHat; // Updated to use a valid icon
     default:
       return faShoppingBag;
   }
 };
 
-const LandingPage = ({ onCartClick }) => {
+const LandingPage = ({ onCartClick, refreshCartCount }) => {
   const navigate = useNavigate();
   const [featuredProducts, setFeaturedProducts] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -116,54 +116,52 @@ const LandingPage = ({ onCartClick }) => {
     }).format(amount);
   };
 
-  // Updated useEffect to prevent infinite loop
+  // Updated useEffect to prevent infinite loops
   useEffect(() => {
-    // Declare fetchFeaturedProducts outside to prevent recreation on each render
-    const fetchFeaturedProducts = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
-
-        // Get latest 3 products
-        const response = await axios.get("/api/products?limit=3", {
-          timeout: 5000, // 5 second timeout
-        });
-
-        if (response.data?.success) {
-          // Check if there is actual data
-          if (response.data.data && response.data.data.length > 0) {
-            setFeaturedProducts(response.data.data);
-          } else {
-            // Use fallback products if API returned empty data array
-            console.log("API returned empty data, using fallbacks");
-            setFeaturedProducts(fallbackProducts);
-          }
-        } else {
-          // Use fallback products if API doesn't return success
-          console.log("API request not successful, using fallbacks");
-          setFeaturedProducts(fallbackProducts);
-        }
-      } catch (err) {
-        console.error("Error fetching featured products:", err);
-
-        // Use fallback products on error
-        setFeaturedProducts(fallbackProducts);
-
-        // Only set error if it's not a timeout and we've already retried
-        if (!axios.isCancel(err) && retryCount >= 1) {
-          setError(
-            "We're having trouble connecting to the server. Showing fallback products."
-          );
-        }
-      } finally {
-        setIsLoading(false);
-        // Reset retryCount to prevent further automatic retries
-        setRetryCount(0);
-      }
-    };
-
     // Only fetch on first load or when manual retry is triggered
     if (retryCount === 0 || retryCount === 1) {
+      const fetchFeaturedProducts = async () => {
+        try {
+          setIsLoading(true);
+          setError(null);
+
+          // Get latest 3 products
+          const response = await axios.get("/api/products?limit=3", {
+            timeout: 5000, // 5 second timeout
+          });
+
+          if (response.data?.success) {
+            // Check if there is actual data
+            if (response.data.data && response.data.data.length > 0) {
+              setFeaturedProducts(response.data.data);
+            } else {
+              // Use fallback products if API returned empty data array
+              console.log("API returned empty data, using fallbacks");
+              setFeaturedProducts(fallbackProducts);
+            }
+          } else {
+            // Use fallback products if API doesn't return success
+            console.log("API request not successful, using fallbacks");
+            setFeaturedProducts(fallbackProducts);
+          }
+        } catch (err) {
+          console.error("Error fetching featured products:", err);
+
+          // Use fallback products on error
+          setFeaturedProducts(fallbackProducts);
+
+          // Only set error if it's not a timeout and we've already retried
+          if (!axios.isCancel(err) && retryCount >= 1) {
+            setError(
+              "We're having trouble connecting to the server. Showing fallback products."
+            );
+          }
+        } finally {
+          setIsLoading(false);
+          // Don't reset retryCount here - this was causing the infinite loop
+        }
+      };
+
       fetchFeaturedProducts();
     }
 
@@ -225,6 +223,11 @@ const LandingPage = ({ onCartClick }) => {
             : p
         )
       );
+
+      // Refresh cart count in navbar
+      if (refreshCartCount) {
+        refreshCartCount();
+      }
 
       // Show cart after adding product
       if (onCartClick) {
@@ -460,6 +463,12 @@ const LandingPage = ({ onCartClick }) => {
             <div>
               <div className="text-center text-orange-500 py-6 mb-8 bg-orange-50 border border-orange-200 rounded-lg">
                 {error}
+                <button
+                  onClick={handleRetryFetch}
+                  className="ml-4 px-3 py-1 bg-amber-500 text-white rounded hover:bg-amber-600 text-sm"
+                >
+                  Retry
+                </button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-12">
                 {featuredProducts.map((product, index) => (
@@ -779,7 +788,6 @@ const ProductItem = ({
 }) => {
   return (
     <motion.div
-      key={product.product_id}
       className="group cursor-pointer text-black bg-white rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-all"
       initial={{ opacity: 0, y: 50 }}
       whileInView={{ opacity: 1, y: 0 }}
