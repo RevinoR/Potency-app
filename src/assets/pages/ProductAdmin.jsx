@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import NavbarAdmin from "../components/NavbarAdmin";
 import ProductGrid from "../components/ProductGrid";
@@ -7,14 +7,15 @@ import AddProductModal from "../components/AddProductModal";
 import axios from "axios";
 
 const ProductAdminPage = () => {
+  // State management
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0); // Changed from refreshTrigger to refreshKey
   const navigate = useNavigate();
 
-  // Check if user is authenticated and is admin
+  // Check if user is authenticated and is admin - only runs once on mount
   useEffect(() => {
     const checkAuth = async () => {
       try {
@@ -46,8 +47,8 @@ const ProductAdminPage = () => {
     checkAuth();
   }, [navigate]);
 
-  // Handle product selection
-  const handleProductSelect = (product) => {
+  // Memoized product selection handler
+  const handleProductSelect = useCallback((product) => {
     setSelectedProduct(product);
 
     // In mobile view, scroll to detail section
@@ -57,35 +58,34 @@ const ProductAdminPage = () => {
         detailSection.scrollIntoView({ behavior: "smooth" });
       }
     }
-  };
+  }, []);
 
-  // Handle product update
-  const handleProductUpdate = (updatedProduct) => {
+  // Product update handler - memoized to prevent unnecessary re-renders
+  const handleProductUpdate = useCallback((updatedProduct) => {
     // Update selected product if it's the one that was updated
-    if (
-      selectedProduct &&
-      selectedProduct.product_id === updatedProduct.product_id
-    ) {
-      setSelectedProduct(updatedProduct);
-    }
+    setSelectedProduct((prev) =>
+      prev && prev.product_id === updatedProduct.product_id
+        ? updatedProduct
+        : prev
+    );
 
     // Trigger a refresh of the product grid
-    setRefreshTrigger((prev) => prev + 1);
-  };
+    setRefreshKey((key) => key + 1);
+  }, []);
 
-  // Handle product delete
-  const handleProductDelete = (productId) => {
+  // Product delete handler - memoized to prevent unnecessary re-renders
+  const handleProductDelete = useCallback((productId) => {
     // Clear selected product if it's the one that was deleted
-    if (selectedProduct && selectedProduct.product_id === productId) {
-      setSelectedProduct(null);
-    }
+    setSelectedProduct((prev) =>
+      prev && prev.product_id === productId ? null : prev
+    );
 
     // Trigger a refresh of the product grid
-    setRefreshTrigger((prev) => prev + 1);
-  };
+    setRefreshKey((key) => key + 1);
+  }, []);
 
-  // Handle adding a new product
-  const handleAddProduct = async (productData) => {
+  // Add product handler - memoized to prevent unnecessary re-renders
+  const handleAddProduct = useCallback(async (productData) => {
     try {
       const formData = new FormData();
 
@@ -111,13 +111,14 @@ const ProductAdminPage = () => {
         },
       });
 
-      // Trigger refresh and close modal
-      setRefreshTrigger((prev) => prev + 1);
+      // Only close modal if API call is successful
       setIsAddModalOpen(false);
 
-      // Select the newly created product
+      // Select the newly created product if it exists in the response
       if (response.data && response.data.data) {
         setSelectedProduct(response.data.data);
+        // Refresh product grid after successful creation
+        setRefreshKey((key) => key + 1);
       }
     } catch (error) {
       console.error("Error adding product:", error);
@@ -126,7 +127,7 @@ const ProductAdminPage = () => {
           (error.response?.data?.message || "Unknown error")
       );
     }
-  };
+  }, []);
 
   // If still checking auth, show loading
   if (isLoading) {
@@ -196,36 +197,12 @@ const ProductAdminPage = () => {
       </div>
 
       <div className="pt-16 pb-8 container mx-auto px-4">
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold">Product Management</h1>
-          <button
-            onClick={() => setIsAddModalOpen(true)}
-            className="hidden md:flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-md transition-colors"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-5 w-5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 6v6m0 0v6m0-6h6m-6 0H6"
-              />
-            </svg>
-            Add New Product
-          </button>
-        </div>
-
         {/* Desktop Layout */}
         <div className="hidden md:flex gap-6">
           <div className="w-2/3 bg-white rounded-lg shadow-sm p-6">
             <ProductGrid
               onSelect={handleProductSelect}
-              refreshTrigger={refreshTrigger}
+              refreshKey={refreshKey} // Changed prop name to refreshKey
             />
           </div>
 
@@ -243,7 +220,7 @@ const ProductAdminPage = () => {
           <div className="bg-white rounded-lg shadow-sm p-4 mb-6">
             <ProductGrid
               onSelect={handleProductSelect}
-              refreshTrigger={refreshTrigger}
+              refreshKey={refreshKey} // Changed prop name to refreshKey
             />
           </div>
 

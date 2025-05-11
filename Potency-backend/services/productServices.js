@@ -10,12 +10,26 @@ export const getAllProducts = async (page = 1, limit = 10) => {
       `Getting products for page ${page}, limit ${limit}, offset ${offset}`
     );
 
-    // Get products
-    const { rows: products } = await productModel.getAllProducts(limit, offset);
-    console.log(`Retrieved ${products.length} products from database`);
+    // Get products with error handling
+    let products = [];
+    let countRows = [{ count: 0 }];
 
-    // Get total count
-    const { rows: countRows } = await productModel.getTotalProductCount();
+    try {
+      const result = await productModel.getAllProducts(limit, offset);
+      if (result && result.rows) {
+        products = result.rows;
+      }
+
+      // Get total count
+      const countResult = await productModel.getTotalProductCount();
+      if (countResult && countResult.rows && countResult.rows.length > 0) {
+        countRows = countResult.rows;
+      }
+    } catch (dbError) {
+      console.error("Database error in getAllProducts:", dbError);
+      // Just log the error, and continue with empty arrays
+    }
+
     const total = countRows.length > 0 ? parseInt(countRows[0].count) : 0;
     console.log(`Total product count: ${total}`);
 
@@ -26,44 +40,28 @@ export const getAllProducts = async (page = 1, limit = 10) => {
       );
     }
 
-    // If there's no data but we have a total count > 0, try without pagination
-    if (products.length === 0 && total > 0) {
-      console.log("Attempting to fetch products without pagination");
-      const fallbackQuery = await productModel.getAllProducts(100, 0); // Get up to 100 products with no offset
-      if (fallbackQuery.rows && fallbackQuery.rows.length > 0) {
-        console.log(
-          `Fallback query returned ${fallbackQuery.rows.length} products`
-        );
-        return {
-          data: fallbackQuery.rows,
-          pagination: {
-            total: total,
-            page: 1,
-            limit: fallbackQuery.rows.length,
-            pages: Math.ceil(total / fallbackQuery.rows.length),
-          },
-        };
-      }
-    }
-
     return {
-      data: products,
+      data: products || [],
       pagination: {
         total: total,
         page: parseInt(page),
         limit: parseInt(limit),
-        pages: Math.ceil(total / limit),
+        pages: Math.ceil(total / limit) || 1,
       },
     };
   } catch (error) {
     console.error("ProductService.getAllProducts error:", error);
 
-    // Provide more context in the error
-    const enhancedError = new Error(
-      `Error retrieving products: ${error.message}`
-    );
-    enhancedError.originalError = error;
-    throw enhancedError;
+    // Return empty result instead of throwing error
+    return {
+      data: [],
+      pagination: {
+        total: 0,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: 1,
+      },
+    };
   }
 };
 

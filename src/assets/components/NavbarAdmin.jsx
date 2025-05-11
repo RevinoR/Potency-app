@@ -10,74 +10,115 @@ import {
   faList,
   faBars,
   faTimes,
+  faExclamationTriangle,
 } from "@fortawesome/free-solid-svg-icons";
+import { isAuthenticated, isAdmin, logout, getUser } from "../../utils/auth";
 
 const NavbarAdmin = () => {
   const [user, setUser] = useState(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [authError, setAuthError] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
 
-  // Get user info from localStorage
+  // Check if user is authenticated and is admin
   useEffect(() => {
     const checkAuth = () => {
-      const storedUser = localStorage.getItem("user");
-      const token = localStorage.getItem("token");
+      setIsLoading(true);
+      setAuthError(null);
 
-      if (!storedUser || !token) {
-        // Not logged in, redirect to login
-        navigate("/signin", { state: { returnUrl: window.location.pathname } });
+      // Check if user is authenticated
+      if (!isAuthenticated()) {
+        setAuthError("You must be logged in to access the admin area.");
+        setTimeout(
+          () =>
+            navigate("/signin", {
+              state: { returnUrl: window.location.pathname },
+            }),
+          2000
+        );
         return;
       }
-
-      const parsedUser = JSON.parse(storedUser);
 
       // Check if user is admin
-      if (parsedUser.role !== "admin") {
-        // Not an admin, redirect to home
-        navigate("/");
+      if (!isAdmin()) {
+        setAuthError("You do not have permission to access the admin area.");
+        setTimeout(() => navigate("/"), 2000);
         return;
       }
 
-      setUser(parsedUser);
+      // Get user data
+      const userData = getUser();
+      setUser(userData);
+      setIsLoading(false);
     };
 
     checkAuth();
 
-    // Listen for login/logout changes in other tabs
-    const handleStorage = () => {
-      const updatedUser = localStorage.getItem("user");
-      const token = localStorage.getItem("token");
-
-      if (!updatedUser || !token) {
+    // Listen for storage changes (logout in other tabs)
+    const handleStorageChange = () => {
+      if (!isAuthenticated()) {
         navigate("/signin");
-        return;
       }
-
-      setUser(updatedUser ? JSON.parse(updatedUser) : null);
     };
 
-    window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
   }, [navigate]);
 
-  const handleLogout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    setUser(null);
-    navigate("/");
+  // Handle logout
+  const handleLogout = async () => {
+    try {
+      await logout();
+      navigate("/signin");
+    } catch (error) {
+      console.error("Logout error:", error);
+      // Still navigate away even if the logout API call fails
+      navigate("/signin");
+    }
   };
 
+  // Toggle mobile menu
   const toggleMobileMenu = () => {
     setIsMobileMenuOpen(!isMobileMenuOpen);
   };
 
+  // Toggle user dropdown
   const toggleDropdown = () => {
     setIsDropdownOpen(!isDropdownOpen);
   };
 
+  // Handle clicks outside dropdown
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (isDropdownOpen && !event.target.closest(".dropdown-container")) {
+        setIsDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isDropdownOpen]);
+
+  // Show auth error
+  if (authError) {
+    return (
+      <div className="fixed top-0 w-full z-50 bg-red-100 text-red-800 p-4 shadow-md">
+        <div className="container mx-auto flex items-center">
+          <FontAwesomeIcon
+            icon={faExclamationTriangle}
+            className="mr-3 text-red-600"
+          />
+          <span>{authError}</span>
+          <span className="ml-3 text-sm">Redirecting...</span>
+        </div>
+      </div>
+    );
+  }
+
   // Loading state or not authenticated
-  if (!user) {
+  if (isLoading || !user) {
     return (
       <nav className="fixed top-0 w-full z-50 px-6 md:px-12 py-4 bg-white shadow-sm">
         <div className="flex items-center justify-between">
@@ -109,13 +150,6 @@ const NavbarAdmin = () => {
             <span>Products</span>
           </Link>
           <Link
-            to="/admin/orders"
-            className="text-gray-700 hover:text-amber-500 flex items-center"
-          >
-            <FontAwesomeIcon icon={faList} className="mr-2" />
-            <span>Orders</span>
-          </Link>
-          <Link
             to="/"
             className="text-gray-700 hover:text-amber-500 flex items-center"
           >
@@ -126,7 +160,7 @@ const NavbarAdmin = () => {
 
         {/* User Info and Logout - Desktop */}
         <div className="hidden md:flex items-center gap-4">
-          <div className="relative">
+          <div className="relative dropdown-container">
             <button
               onClick={toggleDropdown}
               className="flex items-center gap-2 text-gray-700 hover:text-black px-3 py-2 rounded-md hover:bg-gray-100"
@@ -187,6 +221,7 @@ const NavbarAdmin = () => {
             <Link
               to="/admin/products"
               className="text-gray-700 hover:text-amber-500 py-2 flex items-center"
+              onClick={() => setIsMobileMenuOpen(false)}
             >
               <FontAwesomeIcon icon={faBox} className="mr-3 w-5 text-center" />
               <span>Products</span>
@@ -194,6 +229,7 @@ const NavbarAdmin = () => {
             <Link
               to="/admin/orders"
               className="text-gray-700 hover:text-amber-500 py-2 flex items-center"
+              onClick={() => setIsMobileMenuOpen(false)}
             >
               <FontAwesomeIcon icon={faList} className="mr-3 w-5 text-center" />
               <span>Orders</span>
@@ -201,6 +237,7 @@ const NavbarAdmin = () => {
             <Link
               to="/"
               className="text-gray-700 hover:text-amber-500 py-2 flex items-center"
+              onClick={() => setIsMobileMenuOpen(false)}
             >
               <FontAwesomeIcon
                 icon={faShoppingBag}

@@ -13,6 +13,8 @@ import OrderHistory from "./assets/pages/OrderHistory";
 import Cart from "./assets/components/Cart";
 import Checkout from "./assets/components/Checkout";
 import OrderConfirmation from "./assets/components/OrderConfirmation";
+import AdminRoute from "./utils/AdminRoutes";
+import { setupAuthInterceptors } from "./utils/auth";
 
 function App() {
   const [showCart, setShowCart] = useState(false);
@@ -20,6 +22,11 @@ function App() {
   const [orderData, setOrderData] = useState(null);
   const [showOrderConfirmation, setShowOrderConfirmation] = useState(false);
   const navbarRef = useRef(null);
+
+  // Set up auth interceptors when app mounts
+  useEffect(() => {
+    setupAuthInterceptors();
+  }, []);
 
   // Handle cart toggle
   const toggleCart = useCallback(() => {
@@ -142,12 +149,19 @@ function App() {
         />
         <Route path="/orders" element={<OrderHistory />} />
 
-        {/* Routes without Navbar and Footer */}
+        {/* Auth Routes without Navbar and Footer */}
         <Route path="/signin" element={<SignIn />} />
         <Route path="/signup" element={<SignUp />} />
 
-        {/* Admin routes - only NavbarAdmin, no Footer or regular Navbar */}
-        <Route path="/admin/products" element={<ProductAdminPage />} />
+        {/* Protected Admin routes - only accessible to admins */}
+        <Route
+          path="/admin/products"
+          element={
+            <AdminRoute>
+              <ProductAdminPage />
+            </AdminRoute>
+          }
+        />
       </Routes>
     </BrowserRouter>
   );
