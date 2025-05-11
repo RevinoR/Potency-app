@@ -11,12 +11,14 @@ import { query } from "../src/db.js";
  * @param {number} userId - User ID
  * @param {Object} shippingInfo - Shipping information
  * @param {string} paymentMethod - Payment method
+ * @param {string} paymentId - Payment transaction ID
  * @returns {Promise} - Created order details
  */
 export const createOrderFromCart = async (
   userId,
   shippingInfo,
-  paymentMethod
+  paymentMethod,
+  paymentId = null
 ) => {
   // Start a transaction to ensure all database operations succeed together
   const client = await query("BEGIN");
@@ -34,9 +36,11 @@ export const createOrderFromCart = async (
     const orders = [];
     const transactions = [];
 
-    // Create a payment ID (would normally come from payment processor)
-    const paymentId =
-      "PAY-" + Math.random().toString(36).substring(2, 10).toUpperCase();
+    // Create a payment ID if none provided (would normally come from payment processor)
+    if (!paymentId) {
+      paymentId =
+        "PAY-" + Math.random().toString(36).substring(2, 10).toUpperCase();
+    }
 
     // Process each cart item as a separate order entry
     for (const item of items) {
@@ -53,6 +57,23 @@ export const createOrderFromCart = async (
         product_id: item.product_id,
         status: "pending",
       };
+
+      // Check stock availability one last time to prevent race conditions
+      const { rows: products } = await productModel.getProductById(
+        item.product_id
+      );
+
+      if (products.length === 0) {
+        throw new Error(`Product "${item.name}" is no longer available`);
+      }
+
+      const product = products[0];
+
+      if (product.stock < item.quantity) {
+        throw new Error(
+          `Inventory error: Not enough stock for "${item.name}". Available: ${product.stock}, Requested: ${item.quantity}`
+        );
+      }
 
       const orderResult = await orderModel.createOrder(orderData);
       const order = orderResult.rows[0];
@@ -72,24 +93,18 @@ export const createOrderFromCart = async (
       );
       transactions.push(transactionResult.rows[0]);
 
-      // 3. Update product stock
-      const { rows: products } = await productModel.getProductById(
-        item.product_id
+      // 3. Update product stock - using the latest product data to prevent race conditions
+      await productModel.updateProductStock(
+        item.product_id,
+        product.stock - item.quantity
       );
-      if (products.length > 0) {
-        const product = products[0];
-        await productModel.updateProductStock(
-          item.product_id,
-          product.stock - item.quantity
-        );
 
-        // 4. Increment sold count
-        await productModel.incrementSoldCount(item.product_id, item.quantity);
-      }
+      // 4. Increment sold count
+      await productModel.incrementSoldCount(item.product_id, item.quantity);
     }
 
-    // 5. Clear the cart
-    await cartModel.clearCart(userId);
+    // 5. Clear the cart - we'll now do this in the controller after confirming success
+    // This ensures better UX if there's an error after order creation
 
     // Commit the transaction
     await query("COMMIT");
@@ -108,7 +123,15 @@ export const createOrderFromCart = async (
   } catch (error) {
     // Rollback the transaction if any operation fails
     await query("ROLLBACK");
-    throw new Error(`OrderService.createOrderFromCart: ${error.message}`);
+
+    // Add prefix to distinguish between different types of errors
+    if (error.message.includes("Inventory")) {
+      throw new Error(`Inventory: ${error.message}`);
+    } else if (error.message.includes("Transaction")) {
+      throw new Error(`Transaction: ${error.message}`);
+    } else {
+      throw new Error(`OrderService.createOrderFromCart: ${error.message}`);
+    }
   }
 };
 
@@ -143,8 +166,17 @@ export const getOrderDetails = async (orderId, userId) => {
     const order = rows[0];
 
     // Security check: ensure the order belongs to the user
+    // Skip this check for admin users
     if (order.user_id !== userId) {
-      throw new Error("Unauthorized access to order");
+      // Check if the user is an admin
+      const { rows: adminCheck } = await query(
+        'SELECT role FROM "User" WHERE user_id = $1',
+        [userId]
+      );
+
+      if (adminCheck.length === 0 || adminCheck[0].role !== "admin") {
+        throw new Error("Unauthorized access to order");
+      }
     }
 
     // Get transaction details for this order
@@ -167,6 +199,9 @@ export const getOrderDetails = async (orderId, userId) => {
  * @returns {Promise} - Updated order
  */
 export const updateOrderStatus = async (orderId, status) => {
+  // Start a transaction to ensure stock updates are atomic
+  const client = await query("BEGIN");
+
   try {
     const validStatuses = [
       "pending",
@@ -182,15 +217,36 @@ export const updateOrderStatus = async (orderId, status) => {
       );
     }
 
+    // Get the current order to check its current status
+    const { rows: currentOrderRows } = await orderModel.getOrderById(orderId);
+
+    if (currentOrderRows.length === 0) {
+      throw new Error("Order not found");
+    }
+
+    const currentOrder = currentOrderRows[0];
+    const currentStatus = currentOrder.status;
+
+    // Don't allow status change if already cancelled or delivered (terminal states)
+    if (currentStatus === "cancelled" && status !== "cancelled") {
+      throw new Error("Cannot change status of a cancelled order");
+    }
+
+    if (currentStatus === "delivered" && status !== "delivered") {
+      throw new Error("Cannot change status of a delivered order");
+    }
+
+    // Update the order status
     const { rows } = await orderModel.updateOrderStatus(orderId, status);
 
     if (rows.length === 0) {
       throw new Error("Order not found");
     }
 
+    const order = rows[0];
+
     // If order is cancelled, return items to inventory
-    if (status === "cancelled") {
-      const order = rows[0];
+    if (status === "cancelled" && currentStatus !== "cancelled") {
       const { rows: products } = await productModel.getProductById(
         order.product_id
       );
@@ -210,8 +266,13 @@ export const updateOrderStatus = async (orderId, status) => {
       }
     }
 
-    return rows[0];
+    // Commit the transaction
+    await query("COMMIT");
+
+    return order;
   } catch (error) {
+    // Rollback the transaction if any operation fails
+    await query("ROLLBACK");
     throw new Error(`OrderService.updateOrderStatus: ${error.message}`);
   }
 };
@@ -253,6 +314,20 @@ export const getAllOrders = async (page = 1, limit = 10) => {
  */
 export const getOrdersByStatus = async (status, page = 1, limit = 10) => {
   try {
+    const validStatuses = [
+      "pending",
+      "processing",
+      "shipped",
+      "delivered",
+      "cancelled",
+    ];
+
+    if (!validStatuses.includes(status)) {
+      throw new Error(
+        `Invalid order status. Valid statuses are: ${validStatuses.join(", ")}`
+      );
+    }
+
     const offset = (page - 1) * limit;
     const { rows: orders } = await orderModel.getOrdersByStatus(
       status,

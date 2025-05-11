@@ -26,6 +26,23 @@ export const addToCart = async (userId, productId, quantity) => {
       );
     }
 
+    // Get existing cart item if any
+    const { rows: cartItems } = await cartModel.getCartItemByUserAndProduct(
+      userId,
+      productId
+    );
+
+    // Calculate new total quantity
+    const existingQuantity = cartItems.length > 0 ? cartItems[0].quantity : 0;
+    const newTotalQuantity = existingQuantity + quantity;
+
+    // Recheck stock availability with total quantity
+    if (product.stock < newTotalQuantity) {
+      throw new Error(
+        `Not enough stock available. Only ${product.stock} items left (you already have ${existingQuantity} in your cart).`
+      );
+    }
+
     // Add to cart
     const result = await cartModel.addCartItem(userId, productId, quantity);
     return result.rows[0];
@@ -162,6 +179,7 @@ export const validateCartForCheckout = async (userId) => {
 
     // Check stock for each item
     const stockIssues = [];
+    const invalidItems = [];
 
     for (const item of items) {
       const { rows: products } = await productModel.getProductById(
@@ -169,32 +187,61 @@ export const validateCartForCheckout = async (userId) => {
       );
 
       if (products.length === 0) {
-        stockIssues.push(`Product "${item.name}" is no longer available`);
+        const issue = `Product "${item.name}" is no longer available`;
+        stockIssues.push(issue);
+        invalidItems.push({
+          productId: item.product_id,
+          name: item.name,
+          issue: "no_longer_available",
+          message: issue,
+        });
         continue;
       }
 
       const product = products[0];
 
       if (product.stock < item.quantity) {
-        stockIssues.push(
-          `Not enough stock for "${item.name}". Available: ${product.stock}, Requested: ${item.quantity}`
-        );
+        const issue = `Not enough stock for "${item.name}". Available: ${product.stock}, Requested: ${item.quantity}`;
+        stockIssues.push(issue);
+        invalidItems.push({
+          productId: item.product_id,
+          name: item.name,
+          issue: "insufficient_stock",
+          available: product.stock,
+          requested: item.quantity,
+          message: issue,
+        });
       }
 
       // Check if price has changed
       if (product.price !== item.price) {
-        stockIssues.push(
-          `Price for "${item.name}" has changed from ${item.price} to ${product.price}`
-        );
+        const issue = `Price for "${item.name}" has changed from ${item.price} to ${product.price}`;
+        stockIssues.push(issue);
+        invalidItems.push({
+          productId: item.product_id,
+          name: item.name,
+          issue: "price_changed",
+          oldPrice: item.price,
+          newPrice: product.price,
+          message: issue,
+        });
       }
     }
 
     if (stockIssues.length > 0) {
-      throw new Error(`Cart validation failed: ${stockIssues.join("; ")}`);
+      const error = new Error(
+        `Cart validation failed: ${stockIssues.join("; ")}`
+      );
+      error.invalidItems = invalidItems;
+      throw error;
     }
 
     return { items, summary };
   } catch (error) {
+    // Pass along any custom error properties
+    if (error.invalidItems) {
+      throw error;
+    }
     throw new Error(`CartService.validateCartForCheckout: ${error.message}`);
   }
 };

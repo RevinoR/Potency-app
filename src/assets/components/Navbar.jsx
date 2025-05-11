@@ -4,7 +4,6 @@ import React, {
   useEffect,
   forwardRef,
   useImperativeHandle,
-  useCallback,
   useRef,
 } from "react";
 import useScrollPosition from "./ScrollDetection";
@@ -18,22 +17,45 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import axios from "axios";
 
+// Create a stable axios instance outside component
+const cartApi = axios.create();
+
 const Navbar = forwardRef(({ onCartClick }, ref) => {
   const [isVisible, setIsVisible] = useState(true);
   const [user, setUser] = useState(null);
   const [cartCount, setCartCount] = useState(0);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [cartLoading, setCartLoading] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
   const { scrollDirection, scrollY, isBlurActive } = useScrollPosition();
   const location = useLocation();
   const navigate = useNavigate();
-  const retryTimeoutRef = useRef(null);
-  const [isOffline, setIsOffline] = useState(false);
+
+  // Use refs for values that shouldn't trigger re-renders
+  const timeoutRef = useRef(null);
+  const intervalRef = useRef(null);
+  const lastFetchTimeRef = useRef(0);
+  const isMountedRef = useRef(true);
+
+  // Fixed debounce time of 10 seconds
+  const DEBOUNCE_TIME = 10000;
 
   // Monitor network status
   useEffect(() => {
-    const handleOnline = () => setIsOffline(false);
-    const handleOffline = () => setIsOffline(true);
+    const handleOnline = () => {
+      if (isMountedRef.current) {
+        setIsOffline(false);
+      }
+    };
+
+    const handleOffline = () => {
+      if (isMountedRef.current) {
+        setIsOffline(true);
+      }
+    };
+
+    // Set initial offline status
+    setIsOffline(!navigator.onLine);
 
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
@@ -44,118 +66,148 @@ const Navbar = forwardRef(({ onCartClick }, ref) => {
     };
   }, []);
 
-  // Fetch cart count function with retry and error handling
-  const fetchCartCount = useCallback(async (retryCount = 0) => {
+  // Simplified, stable fetchCartCount function
+  const fetchCartCount = useRef(async (force = false) => {
+    // Skip if offline, no token, or not mounted
+    if (!isMountedRef.current || isOffline) return;
+
     const token = localStorage.getItem("token");
     if (!token) return;
 
-    // Clear any existing retry timeout
-    if (retryTimeoutRef.current) {
-      clearTimeout(retryTimeoutRef.current);
-      retryTimeoutRef.current = null;
+    // Implement simple debouncing
+    const now = Date.now();
+    if (!force && now - lastFetchTimeRef.current < DEBOUNCE_TIME) {
+      console.log("Cart fetch debounced");
+      return;
     }
 
-    try {
-      setCartLoading(true);
+    // Clear any previous timeout
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
 
-      // Use a timeout to prevent hanging requests
+    // Update last fetch time
+    lastFetchTimeRef.current = now;
+
+    try {
+      if (isMountedRef.current) {
+        setCartLoading(true);
+      }
+
+      // Create a new AbortController for this request
       const controller = new AbortController();
+
+      // Set timeout to abort after 5 seconds
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-      const response = await axios.get("/api/cart", {
+      const response = await cartApi.get("/api/cart", {
         headers: {
           Authorization: `Bearer ${token}`,
         },
         signal: controller.signal,
-        // Use baseURL configuration to ensure proper URL
-        baseURL: window.location.origin,
       });
 
       clearTimeout(timeoutId);
 
-      if (response.data && response.data.success && response.data.data) {
+      // Only update state if component is still mounted
+      if (isMountedRef.current && response.data?.data) {
         setCartCount(response.data.data.items.length);
-        setIsOffline(false); // Successfully connected
+        setIsOffline(false);
       }
     } catch (error) {
-      console.error("Error fetching cart:", error);
+      // Ignore canceled requests
+      if (error.name !== "CanceledError" && error.name !== "AbortError") {
+        console.error("Cart fetch error:", error.name);
 
-      // Only retry on network errors, not auth errors
-      if (error.code === "ERR_NETWORK" && retryCount < 2 && navigator.onLine) {
-        const nextRetry = Math.min(2000 * (retryCount + 1), 10000); // Exponential backoff
-        console.log(`Retrying cart fetch in ${nextRetry / 1000}s...`);
-
-        // Set up retry with exponential backoff
-        retryTimeoutRef.current = setTimeout(() => {
-          fetchCartCount(retryCount + 1);
-        }, nextRetry);
+        if (error.code === "ERR_NETWORK" && isMountedRef.current) {
+          setIsOffline(true);
+        }
+      } else {
+        console.log("Cart fetch was canceled");
       }
-
-      // Set offline status for network errors
-      if (error.code === "ERR_NETWORK") {
-        setIsOffline(true);
-      }
-
-      // Don't reset cart count on error to prevent flashing
     } finally {
-      setCartLoading(false);
+      // Only update state if component is still mounted
+      if (isMountedRef.current) {
+        setCartLoading(false);
+      }
     }
-  }, []); // No dependencies to avoid recreation
+  }).current;
 
   // Expose refreshCartCount method to parent components
   useImperativeHandle(ref, () => ({
-    refreshCartCount: () => fetchCartCount(0),
+    refreshCartCount: () => fetchCartCount(true),
   }));
 
-  // Check if user is logged in and get cart count
+  // Set up fetching and cleanup
+  useEffect(() => {
+    // Set mounted flag
+    isMountedRef.current = true;
+
+    // Initial fetch if user exists
+    if (user && !isOffline) {
+      fetchCartCount(true);
+    }
+
+    // Set up interval for periodic refresh when user is logged in
+    if (user) {
+      intervalRef.current = setInterval(() => {
+        if (navigator.onLine && !isOffline) {
+          fetchCartCount();
+        }
+      }, 60000); // Check every minute instead of 30 seconds
+    }
+
+    // Comprehensive cleanup
+    return () => {
+      isMountedRef.current = false;
+
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, [user, isOffline, fetchCartCount]);
+
+  // Separate effect for online/offline state changes
+  useEffect(() => {
+    if (!isOffline && user) {
+      // When coming back online, refresh cart
+      fetchCartCount(true);
+    }
+  }, [isOffline, user, fetchCartCount]);
+
+  // Check localStorage for user info
   useEffect(() => {
     const checkUserLoggedIn = () => {
-      const storedUser = localStorage.getItem("user");
-      if (storedUser) {
-        try {
+      try {
+        const storedUser = localStorage.getItem("user");
+        if (storedUser) {
           setUser(JSON.parse(storedUser));
-          fetchCartCount(0);
-        } catch (e) {
-          console.error("Error parsing user data:", e);
-          // Handle corrupted localStorage
-          localStorage.removeItem("user");
+        } else {
           setUser(null);
+          setCartCount(0);
         }
-      } else {
+      } catch (e) {
+        console.error("Error parsing user data:", e);
+        localStorage.removeItem("user");
         setUser(null);
         setCartCount(0);
       }
     };
 
+    // Check on mount
     checkUserLoggedIn();
 
-    // Periodically refresh cart count, but only when online
-    const refreshInterval = setInterval(() => {
-      if (user && navigator.onLine && !isOffline) {
-        fetchCartCount(0);
-      }
-    }, 30000); // Refresh every 30 seconds when user is logged in
-
-    // Optional: add event listener to detect login/logout from other tabs
+    // Listen for localStorage changes
     window.addEventListener("storage", checkUserLoggedIn);
-
-    return () => {
-      window.removeEventListener("storage", checkUserLoggedIn);
-      clearInterval(refreshInterval);
-
-      // Clear any pending retry timeout
-      if (retryTimeoutRef.current) {
-        clearTimeout(retryTimeoutRef.current);
-      }
-    };
-  }, [user, fetchCartCount, isOffline]);
-
-  // Also refetch cart when coming back online
-  useEffect(() => {
-    if (!isOffline && user) {
-      fetchCartCount(0);
-    }
-  }, [isOffline, user, fetchCartCount]);
+    return () => window.removeEventListener("storage", checkUserLoggedIn);
+  }, []);
 
   // Handle navbar visibility based on scroll
   useEffect(() => {
@@ -180,12 +232,8 @@ const Navbar = forwardRef(({ onCartClick }, ref) => {
     if (onCartClick) {
       onCartClick();
     } else {
-      // Fallback if no cart click handler is provided
       if (!user) {
         navigate("/signin", { state: { returnUrl: location.pathname } });
-      } else {
-        // Placeholder for future implementation
-        console.log("Cart clicked, but no handler provided");
       }
     }
   };
@@ -471,7 +519,6 @@ const Navbar = forwardRef(({ onCartClick }, ref) => {
   );
 });
 
-// Add display name for better debugging
 Navbar.displayName = "Navbar";
 
 export default Navbar;

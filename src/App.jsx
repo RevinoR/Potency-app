@@ -1,6 +1,5 @@
-// Update the useEffect for cart handling in App.jsx
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import ScrollToTop from "./assets/components/ScrollToTop";
 import Navbar from "./assets/components/Navbar";
 import Footer from "./assets/components/Footer";
@@ -23,47 +22,62 @@ function App() {
   const navbarRef = useRef(null);
 
   // Handle cart toggle
-  const toggleCart = () => {
+  const toggleCart = useCallback(() => {
     setShowCart(!showCart);
     if (showCheckout) setShowCheckout(false);
     if (showOrderConfirmation) setShowOrderConfirmation(false);
-  };
+  }, [showCart, showCheckout, showOrderConfirmation]);
 
   // Handle checkout
-  const handleProceedToCheckout = () => {
+  const handleProceedToCheckout = useCallback(() => {
     setShowCart(false);
     setShowCheckout(true);
-  };
+  }, []);
 
   // Handle order complete
-  const handleOrderComplete = (data) => {
+  const handleOrderComplete = useCallback((data) => {
     setOrderData(data);
     setShowCheckout(false);
     setShowOrderConfirmation(true);
 
     // Refresh cart count after order completion
     refreshCartCount();
-  };
+  }, []);
 
   // Handle back button from checkout
-  const handleBackToCart = () => {
+  const handleBackToCart = useCallback(() => {
     setShowCheckout(false);
     setShowCart(true);
-  };
+  }, []);
 
   // Close all modals
-  const closeAllModals = () => {
+  const closeAllModals = useCallback(() => {
     setShowCart(false);
     setShowCheckout(false);
     setShowOrderConfirmation(false);
-  };
+    // Reset order data when closing the confirmation
+    setOrderData(null);
+  }, []);
 
   // Helper function to refresh cart count
-  const refreshCartCount = () => {
+  const refreshCartCount = useCallback(() => {
     if (navbarRef.current && navbarRef.current.refreshCartCount) {
       navbarRef.current.refreshCartCount();
     }
-  };
+  }, []);
+
+  // Reset order data when navigating away from confirmation
+  useEffect(() => {
+    if (!showOrderConfirmation && orderData !== null) {
+      // Use a small timeout to prevent immediate clearing
+      // This allows the OrderConfirmation component to access the data before unmounting
+      const timer = setTimeout(() => {
+        setOrderData(null);
+      }, 300);
+
+      return () => clearTimeout(timer);
+    }
+  }, [showOrderConfirmation, orderData]);
 
   return (
     <BrowserRouter>
@@ -87,7 +101,7 @@ function App() {
       )}
 
       {/* Order Confirmation Modal */}
-      {showOrderConfirmation && (
+      {showOrderConfirmation && orderData && (
         <OrderConfirmation orderData={orderData} onClose={closeAllModals} />
       )}
 

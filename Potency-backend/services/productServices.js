@@ -4,16 +4,47 @@ import * as imageService from "../services/imageServices.js";
 
 export const getAllProducts = async (page = 1, limit = 10) => {
   try {
-    // Calculate offset - this was the issue, we were passing (page, limit) to a function expecting (limit, offset)
+    // Calculate offset
     const offset = (page - 1) * limit;
+    console.log(
+      `Getting products for page ${page}, limit ${limit}, offset ${offset}`
+    );
 
-    // Get products with correct parameter order (limit, offset)
+    // Get products
     const { rows: products } = await productModel.getAllProducts(limit, offset);
+    console.log(`Retrieved ${products.length} products from database`);
 
     // Get total count
     const { rows: countRows } = await productModel.getTotalProductCount();
-
     const total = countRows.length > 0 ? parseInt(countRows[0].count) : 0;
+    console.log(`Total product count: ${total}`);
+
+    // Check if we have a mismatch between pagination and actual data
+    if (total > 0 && products.length === 0) {
+      console.warn(
+        `Warning: Pagination reports ${total} total products but query returned empty array`
+      );
+    }
+
+    // If there's no data but we have a total count > 0, try without pagination
+    if (products.length === 0 && total > 0) {
+      console.log("Attempting to fetch products without pagination");
+      const fallbackQuery = await productModel.getAllProducts(100, 0); // Get up to 100 products with no offset
+      if (fallbackQuery.rows && fallbackQuery.rows.length > 0) {
+        console.log(
+          `Fallback query returned ${fallbackQuery.rows.length} products`
+        );
+        return {
+          data: fallbackQuery.rows,
+          pagination: {
+            total: total,
+            page: 1,
+            limit: fallbackQuery.rows.length,
+            pages: Math.ceil(total / fallbackQuery.rows.length),
+          },
+        };
+      }
+    }
 
     return {
       data: products,
@@ -26,16 +57,13 @@ export const getAllProducts = async (page = 1, limit = 10) => {
     };
   } catch (error) {
     console.error("ProductService.getAllProducts error:", error);
-    // Return empty data with pagination instead of throwing error
-    return {
-      data: [],
-      pagination: {
-        total: 0,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: 0,
-      },
-    };
+
+    // Provide more context in the error
+    const enhancedError = new Error(
+      `Error retrieving products: ${error.message}`
+    );
+    enhancedError.originalError = error;
+    throw enhancedError;
   }
 };
 

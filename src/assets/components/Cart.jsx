@@ -1,10 +1,13 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faTrash,
   faPlus,
   faMinus,
   faArrowLeft,
+  faExclamationTriangle,
+  faShoppingBasket,
+  faSync,
 } from "@fortawesome/free-solid-svg-icons";
 import axios from "axios";
 
@@ -15,6 +18,9 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [networkError, setNetworkError] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+  const abortControllerRef = useRef(null);
 
   // Format number as currency
   const formatCurrency = (amount) => {
@@ -25,11 +31,12 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
     }).format(amount);
   };
 
-  // Fetch cart data
-  const fetchCart = async () => {
+  // Fetch cart data with improved error handling
+  const fetchCart = async (retry = false) => {
     try {
       setLoading(true);
       setError(null);
+      setNetworkError(false);
 
       const token = localStorage.getItem("token");
       if (!token) {
@@ -38,31 +45,76 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
         return;
       }
 
+      // Cancel any existing request
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+
+      // Create new abort controller
+      abortControllerRef.current = new AbortController();
+
+      // Set timeout to prevent hanging requests
+      const timeoutId = setTimeout(() => {
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+        }
+      }, 8000);
+
       const response = await axios.get("/api/cart", {
         headers: {
           Authorization: `Bearer ${token}`,
         },
+        signal: abortControllerRef.current.signal,
       });
 
-      setCart(response.data.data);
+      clearTimeout(timeoutId);
 
-      // Notify parent component to update cart count
-      if (onCartUpdated) {
-        onCartUpdated();
+      if (response.data && response.data.data) {
+        setCart(response.data.data);
+
+        // Reset retry count on successful fetch
+        if (retry) {
+          setRetryCount(0);
+        }
+
+        // Notify parent component to update cart count
+        if (onCartUpdated) {
+          onCartUpdated();
+        }
+      } else {
+        setError("Failed to load cart data");
       }
     } catch (err) {
       console.error("Error fetching cart:", err);
-      setError(err.response?.data?.message || "Failed to load cart");
+
+      if (err.name === "AbortError") {
+        setError("Request timed out. Please try again.");
+      } else if (err.code === "ERR_NETWORK") {
+        setNetworkError(true);
+      } else {
+        setError(err.response?.data?.message || "Failed to load cart");
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  // Update item quantity
+  // Update item quantity with error handling
   const updateQuantity = async (cartItemId, newQuantity) => {
     try {
       const token = localStorage.getItem("token");
       if (!token) return;
+
+      // Optimistically update UI
+      const updatedCart = {
+        ...cart,
+        items: cart.items.map((item) =>
+          item.cart_item_id === cartItemId
+            ? { ...item, quantity: newQuantity, isUpdating: true }
+            : item
+        ),
+      };
+      setCart(updatedCart);
 
       await axios.put(
         `/api/cart/${cartItemId}`,
@@ -76,23 +128,34 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
         }
       );
 
-      fetchCart(); // Refresh cart data
-
-      // Notify parent component to update cart count
-      if (onCartUpdated) {
-        onCartUpdated();
-      }
+      // Refresh cart data to get updated totals
+      fetchCart();
     } catch (err) {
       console.error("Error updating quantity:", err);
-      setError(err.response?.data?.message || "Failed to update quantity");
+
+      if (err.code === "ERR_NETWORK") {
+        setNetworkError(true);
+      } else {
+        setError(err.response?.data?.message || "Failed to update quantity");
+      }
+
+      // Revert to original cart state on error
+      fetchCart();
     }
   };
 
-  // Remove item from cart
+  // Remove item from cart with error handling
   const removeItem = async (cartItemId) => {
     try {
       const token = localStorage.getItem("token");
       if (!token) return;
+
+      // Optimistically update UI
+      const updatedCart = {
+        ...cart,
+        items: cart.items.filter((item) => item.cart_item_id !== cartItemId),
+      };
+      setCart(updatedCart);
 
       await axios.delete(`/api/cart/${cartItemId}`, {
         headers: {
@@ -100,23 +163,38 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
         },
       });
 
-      fetchCart(); // Refresh cart data
-
-      // Notify parent component to update cart count
-      if (onCartUpdated) {
-        onCartUpdated();
-      }
+      // Refresh cart data
+      fetchCart();
     } catch (err) {
       console.error("Error removing item:", err);
-      setError(err.response?.data?.message || "Failed to remove item");
+
+      if (err.code === "ERR_NETWORK") {
+        setNetworkError(true);
+      } else {
+        setError(err.response?.data?.message || "Failed to remove item");
+      }
+
+      // Revert to original cart state on error
+      fetchCart();
     }
   };
 
-  // Clear entire cart
+  // Clear entire cart with error handling
   const clearCart = async () => {
     try {
       const token = localStorage.getItem("token");
       if (!token) return;
+
+      // Confirm before clearing
+      if (!window.confirm("Are you sure you want to clear your cart?")) {
+        return;
+      }
+
+      // Optimistically update UI
+      setCart({
+        items: [],
+        summary: { subtotal: 0, tax: 0, total: 0, itemCount: 0 },
+      });
 
       await axios.delete("/api/cart", {
         headers: {
@@ -124,22 +202,40 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
         },
       });
 
-      fetchCart(); // Refresh cart data
-
-      // Notify parent component to update cart count
-      if (onCartUpdated) {
-        onCartUpdated();
-      }
+      // Refresh cart data
+      fetchCart();
     } catch (err) {
       console.error("Error clearing cart:", err);
-      setError(err.response?.data?.message || "Failed to clear cart");
+
+      if (err.code === "ERR_NETWORK") {
+        setNetworkError(true);
+      } else {
+        setError(err.response?.data?.message || "Failed to clear cart");
+      }
+
+      // Revert to original cart state on error
+      fetchCart();
     }
   };
 
   // Fetch cart on component mount
   useEffect(() => {
     fetchCart();
+
+    // Clean up on unmount
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, []);
+
+  // Handle retry logic
+  const handleRetry = () => {
+    // Increment retry count to track attempts
+    setRetryCount((prev) => prev + 1);
+    fetchCart(true);
+  };
 
   // Handle checkout button click
   const handleCheckout = () => {
@@ -166,17 +262,49 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
         </div>
 
         {loading ? (
-          <div className="p-6 text-center">
+          <div className="p-12 text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto"></div>
             <p className="mt-4 text-gray-600">Loading your cart...</p>
           </div>
+        ) : networkError ? (
+          <div className="p-12 text-center">
+            <FontAwesomeIcon
+              icon={faExclamationTriangle}
+              className="text-amber-500 text-4xl mb-4"
+            />
+            <p className="text-lg text-gray-800 mb-4">Network Error</p>
+            <p className="text-gray-600 mb-6">
+              We're having trouble connecting to the server. Please check your
+              internet connection.
+            </p>
+            <button
+              onClick={handleRetry}
+              className="flex items-center justify-center mx-auto px-4 py-2 bg-amber-500 text-white rounded hover:bg-amber-600"
+            >
+              <FontAwesomeIcon icon={faSync} className="mr-2" />
+              Retry Connection ({retryCount})
+            </button>
+          </div>
         ) : error ? (
-          <div className="p-6 text-center">
-            <p className="text-red-500">{error}</p>
+          <div className="p-12 text-center">
+            <p className="text-red-500 mb-4">{error}</p>
+            <button
+              onClick={handleRetry}
+              className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded"
+            >
+              Try Again
+            </button>
           </div>
         ) : cart.items.length === 0 ? (
           <div className="p-12 text-center">
+            <FontAwesomeIcon
+              icon={faShoppingBasket}
+              className="text-gray-300 text-5xl mb-4"
+            />
             <p className="text-xl text-gray-600 mb-6">Your cart is empty</p>
+            <p className="text-gray-500 mb-6">
+              Add some products to your cart and they will appear here
+            </p>
             <button
               onClick={onClose}
               className="px-6 py-2 bg-black text-white hover:bg-gray-800"
@@ -190,7 +318,9 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
               {cart.items.map((item) => (
                 <div
                   key={item.cart_item_id}
-                  className="flex items-start py-4 border-b"
+                  className={`flex items-start py-4 border-b ${
+                    item.isUpdating ? "opacity-60" : ""
+                  }`}
                 >
                   <div className="w-20 h-20 bg-gray-200 mr-4 flex-shrink-0">
                     {item.image ? (
@@ -219,6 +349,7 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
                             )
                           }
                           className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded-l"
+                          disabled={item.isUpdating}
                         >
                           <FontAwesomeIcon icon={faMinus} />
                         </button>
@@ -229,8 +360,19 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
                           onClick={() =>
                             updateQuantity(item.cart_item_id, item.quantity + 1)
                           }
-                          className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded-r"
-                          disabled={item.quantity >= item.stock}
+                          className={`w-8 h-8 flex items-center justify-center border border-gray-300 rounded-r ${
+                            item.quantity >= item.stock
+                              ? "opacity-50 cursor-not-allowed"
+                              : ""
+                          }`}
+                          disabled={
+                            item.quantity >= item.stock || item.isUpdating
+                          }
+                          title={
+                            item.quantity >= item.stock
+                              ? `Max stock: ${item.stock}`
+                              : ""
+                          }
                         >
                           <FontAwesomeIcon icon={faPlus} />
                         </button>
@@ -238,10 +380,16 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
                       <button
                         onClick={() => removeItem(item.cart_item_id)}
                         className="text-red-500 hover:text-red-700"
+                        disabled={item.isUpdating}
                       >
                         <FontAwesomeIcon icon={faTrash} />
                       </button>
                     </div>
+                    {item.quantity >= item.stock && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Max stock reached ({item.stock})
+                      </p>
+                    )}
                   </div>
 
                   <div className="ml-4 text-right">

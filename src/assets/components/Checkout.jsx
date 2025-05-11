@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArrowLeft,
   faCreditCard,
   faMoneyBill,
   faTruck,
+  faExclamationTriangle,
+  faSync,
 } from "@fortawesome/free-solid-svg-icons";
 import { faPaypal } from "@fortawesome/free-brands-svg-icons";
 import axios from "axios";
@@ -35,7 +37,11 @@ const Checkout = ({ onBack, onOrderComplete }) => {
   const [validating, setValidating] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState(null);
+  const [networkError, setNetworkError] = useState(false);
   const [formErrors, setFormErrors] = useState({});
+  const [stockWarnings, setStockWarnings] = useState([]);
+  const abortControllerRef = useRef(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   // Format number as currency
   const formatCurrency = (amount) => {
@@ -47,10 +53,12 @@ const Checkout = ({ onBack, onOrderComplete }) => {
   };
 
   // Fetch and validate cart for checkout
-  const validateCart = async () => {
+  const validateCart = async (retry = false) => {
     try {
       setLoading(true);
       setError(null);
+      setNetworkError(false);
+      setStockWarnings([]);
 
       const token = localStorage.getItem("token");
       if (!token) {
@@ -58,14 +66,50 @@ const Checkout = ({ onBack, onOrderComplete }) => {
         return;
       }
 
+      // Cancel any existing request
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+
+      // Create new abort controller
+      abortControllerRef.current = new AbortController();
+
+      // Set timeout to prevent hanging requests
+      const timeoutId = setTimeout(() => {
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+        }
+      }, 8000);
+
       // Validate cart for checkout
       const response = await axios.get("/api/checkout/validate", {
         headers: {
           Authorization: `Bearer ${token}`,
         },
+        signal: abortControllerRef.current.signal,
       });
 
+      clearTimeout(timeoutId);
+
+      // Reset retry count on successful fetch
+      if (retry) {
+        setRetryCount(0);
+      }
+
+      // Set cart data
       setCart(response.data.data);
+
+      // Check for any stock warnings (items with low stock)
+      const warnings = response.data.data.items
+        .filter((item) => item.stock < 10)
+        .map((item) => ({
+          id: item.product_id,
+          name: item.name,
+          stock: item.stock,
+          quantity: item.quantity,
+        }));
+
+      setStockWarnings(warnings);
 
       // Pre-fill form with user data if available
       const user = JSON.parse(localStorage.getItem("user") || "{}");
@@ -78,9 +122,22 @@ const Checkout = ({ onBack, onOrderComplete }) => {
       }
     } catch (err) {
       console.error("Error validating cart:", err);
-      setError(
-        err.response?.data?.message || "Failed to validate cart for checkout"
-      );
+
+      if (err.name === "AbortError") {
+        setError("Request timed out. Please try again.");
+      } else if (err.code === "ERR_NETWORK") {
+        setNetworkError(true);
+      } else if (
+        err.response?.status === 400 &&
+        err.response?.data?.message?.includes("validation failed")
+      ) {
+        // Handle stock validation errors
+        setError(err.response.data.message);
+      } else {
+        setError(
+          err.response?.data?.message || "Failed to validate cart for checkout"
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -89,6 +146,13 @@ const Checkout = ({ onBack, onOrderComplete }) => {
   // Validate cart on component mount
   useEffect(() => {
     validateCart();
+
+    // Clean up on unmount
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, []);
 
   // Handle input changes
@@ -202,12 +266,53 @@ const Checkout = ({ onBack, onOrderComplete }) => {
     return Object.keys(errors).length === 0;
   };
 
+  // Double-check cart validity just before submission
+  const validateCartBeforeSubmit = async () => {
+    setValidating(true);
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) return false;
+
+      const response = await axios.get("/api/checkout/validate", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      // Update cart with latest data
+      setCart(response.data.data);
+      return true;
+    } catch (err) {
+      console.error("Final cart validation error:", err);
+
+      if (
+        err.response?.status === 400 &&
+        err.response?.data?.message?.includes("validation failed")
+      ) {
+        setError(err.response.data.message);
+      } else {
+        setError(
+          "Cart validation failed. Some items may be out of stock or have changed."
+        );
+      }
+      return false;
+    } finally {
+      setValidating(false);
+    }
+  };
+
   // Handle form submission
   const handleSubmit = async (e) => {
     e.preventDefault();
 
     // Validate form
     if (!validateForm()) {
+      return;
+    }
+
+    // First verify cart is still valid
+    const isCartValid = await validateCartBeforeSubmit();
+    if (!isCartValid) {
       return;
     }
 
@@ -232,7 +337,19 @@ const Checkout = ({ onBack, onOrderComplete }) => {
       onOrderComplete(response.data.data);
     } catch (err) {
       console.error("Error processing checkout:", err);
-      setError(err.response?.data?.message || "Failed to process checkout");
+
+      if (err.code === "ERR_NETWORK") {
+        setError("Network error. Please check your connection and try again.");
+      } else if (
+        err.response?.status === 400 &&
+        err.response?.data?.message?.includes("validation failed")
+      ) {
+        setError(err.response.data.message);
+        // Re-validate cart to show updated stock information
+        validateCart();
+      } else {
+        setError(err.response?.data?.message || "Failed to process checkout");
+      }
 
       // Handle validation errors from server
       if (err.response?.data?.errors) {
@@ -254,27 +371,71 @@ const Checkout = ({ onBack, onOrderComplete }) => {
     }
   };
 
+  // Handle retry when encountering network errors
+  const handleRetry = () => {
+    setRetryCount((prev) => prev + 1);
+    validateCart(true);
+  };
+
   if (loading) {
     return (
-      <div className="p-6 text-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto"></div>
-        <p className="mt-4 text-gray-600">Preparing checkout...</p>
+      <div className="container mx-auto p-4 max-w-4xl">
+        <div className="p-6 text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Preparing checkout...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (networkError) {
+    return (
+      <div className="container mx-auto p-4 max-w-4xl">
+        <div className="p-12 text-center bg-white rounded-lg shadow">
+          <FontAwesomeIcon
+            icon={faExclamationTriangle}
+            className="text-amber-500 text-4xl mb-4"
+          />
+          <p className="text-lg text-gray-800 mb-4">Network Error</p>
+          <p className="text-gray-600 mb-6">
+            We're having trouble connecting to the server. Please check your
+            internet connection.
+          </p>
+          <div className="flex justify-center gap-4">
+            <button
+              onClick={handleRetry}
+              className="flex items-center justify-center px-4 py-2 bg-amber-500 text-white rounded hover:bg-amber-600"
+            >
+              <FontAwesomeIcon icon={faSync} className="mr-2" />
+              Retry Connection ({retryCount})
+            </button>
+
+            <button
+              onClick={onBack}
+              className="px-4 py-2 border border-gray-300 rounded hover:bg-gray-100"
+            >
+              Return to Cart
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="p-6">
-        <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-6">
-          <p className="text-red-700">{error}</p>
+      <div className="container mx-auto p-4 max-w-4xl">
+        <div className="p-6">
+          <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-6">
+            <p className="text-red-700">{error}</p>
+          </div>
+          <button
+            onClick={onBack}
+            className="px-6 py-2 bg-black text-white hover:bg-gray-800"
+          >
+            Return to Cart
+          </button>
         </div>
-        <button
-          onClick={onBack}
-          className="px-6 py-2 bg-black text-white hover:bg-gray-800"
-        >
-          Return to Cart
-        </button>
       </div>
     );
   }
@@ -290,6 +451,20 @@ const Checkout = ({ onBack, onOrderComplete }) => {
       </button>
 
       <h1 className="text-2xl font-bold mb-6">Checkout</h1>
+
+      {stockWarnings.length > 0 && (
+        <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-md">
+          <h3 className="font-medium text-amber-800 mb-2">Inventory Notice</h3>
+          <ul className="text-sm text-amber-700">
+            {stockWarnings.map((warning) => (
+              <li key={warning.id} className="mb-1">
+                {warning.name}: Only {warning.stock} units left in stock (you're
+                ordering {warning.quantity})
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="flex flex-col md:flex-row gap-8">
         {/* Checkout Form */}
@@ -710,9 +885,13 @@ const Checkout = ({ onBack, onOrderComplete }) => {
             <button
               type="submit"
               className="w-full bg-black text-white py-3 font-medium hover:bg-gray-800 disabled:bg-gray-400"
-              disabled={processing}
+              disabled={processing || validating}
             >
-              {processing ? "Processing..." : "Place Order"}
+              {processing
+                ? "Processing..."
+                : validating
+                ? "Validating Cart..."
+                : "Place Order"}
             </button>
           </form>
         </div>
@@ -748,6 +927,11 @@ const Checkout = ({ onBack, onOrderComplete }) => {
                     <p className="text-xs">
                       {item.quantity} × {formatCurrency(item.price)}
                     </p>
+                    {item.stock < 10 && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Only {item.stock} left in stock
+                      </p>
+                    )}
                   </div>
 
                   <div className="ml-2 text-right">

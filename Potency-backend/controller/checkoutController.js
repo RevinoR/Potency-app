@@ -13,9 +13,20 @@ export const validateCheckout = async (req, res) => {
 
     const validatedCart = await cartServices.validateCartForCheckout(userId);
 
+    // Return any stock warnings (items with low stock)
+    const stockWarnings = validatedCart.items
+      .filter((item) => item.stock < 10)
+      .map((item) => ({
+        productId: item.product_id,
+        name: item.name,
+        available: item.stock,
+        requested: item.quantity,
+      }));
+
     res.status(200).json({
       success: true,
       data: validatedCart,
+      stockWarnings: stockWarnings.length > 0 ? stockWarnings : null,
       message: "Cart is valid for checkout",
     });
   } catch (error) {
@@ -32,6 +43,7 @@ export const validateCheckout = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: error.message,
+        invalidItems: error.invalidItems || [],
       });
     }
 
@@ -79,8 +91,19 @@ export const processCheckout = async (req, res) => {
       });
     }
 
-    // First validate the cart
-    await cartServices.validateCartForCheckout(userId);
+    // First validate the cart one more time (ensure stock hasn't changed)
+    try {
+      await cartServices.validateCartForCheckout(userId);
+    } catch (cartError) {
+      // If validation fails, return immediately with the error
+      console.error("Cart validation error during checkout:", cartError);
+
+      return res.status(400).json({
+        success: false,
+        message: cartError.message,
+        invalidItems: cartError.invalidItems || [],
+      });
+    }
 
     // Process payment (simulated)
     const paymentResult = await simulatePaymentProcessing(
@@ -97,17 +120,26 @@ export const processCheckout = async (req, res) => {
 
     // Create the order
     const shippingInfo = { name, email, phone, address };
+
+    // Add payment ID from the processed payment
     const result = await orderServices.createOrderFromCart(
       userId,
       shippingInfo,
-      paymentMethod
+      paymentMethod,
+      paymentResult.transactionId
     );
+
+    // Orders were created successfully, clear the cart
+    await cartServices.clearCart(userId);
 
     res.status(201).json({
       success: true,
       data: {
         orders: result.orders,
-        payment: result.payment,
+        payment: {
+          ...result.payment,
+          transactionId: paymentResult.transactionId,
+        },
         orderSummary: result.summary,
       },
       message: "Order placed successfully",
@@ -115,6 +147,7 @@ export const processCheckout = async (req, res) => {
   } catch (error) {
     console.error("Error in processCheckout:", error);
 
+    // Send more specific error messages based on error type
     if (error.message.includes("Cart is empty")) {
       return res.status(400).json({
         success: false,
@@ -126,6 +159,23 @@ export const processCheckout = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: error.message,
+        invalidItems: error.invalidItems || [],
+      });
+    }
+
+    if (error.message.includes("Transaction")) {
+      return res.status(500).json({
+        success: false,
+        message:
+          "An error occurred during transaction processing. Please try again.",
+      });
+    }
+
+    if (error.message.includes("Inventory")) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Inventory has changed. Some items are no longer available in the requested quantity.",
       });
     }
 
@@ -137,7 +187,7 @@ export const processCheckout = async (req, res) => {
 };
 
 /**
- * Simulate payment processing
+ * Simulate payment processing with more realistic behavior
  * @param {string} paymentMethod - Payment method
  * @param {Object} paymentDetails - Payment details
  * @returns {Promise<Object>} - Payment result
@@ -145,24 +195,78 @@ export const processCheckout = async (req, res) => {
 const simulatePaymentProcessing = async (paymentMethod, paymentDetails) => {
   // In a real application, this would integrate with a payment gateway
   return new Promise((resolve) => {
-    // Simulate processing delay
+    // Simulate processing delay (more realistic timing)
+    const processingTime = 1000 + Math.random() * 1500; // 1-2.5 seconds
+
     setTimeout(() => {
+      // Basic validation for different payment methods
+      let validationError = null;
+
+      if (paymentMethod === "credit_card") {
+        if (
+          !paymentDetails?.cardNumber ||
+          !paymentDetails?.cardHolderName ||
+          !paymentDetails?.expiryMonth ||
+          !paymentDetails?.expiryYear ||
+          !paymentDetails?.cvv
+        ) {
+          validationError = "Missing required credit card details";
+        }
+      } else if (paymentMethod === "paypal" && !paymentDetails?.email) {
+        validationError = "Missing PayPal email";
+      } else if (
+        paymentMethod === "bank_transfer" &&
+        (!paymentDetails?.accountName ||
+          !paymentDetails?.accountNumber ||
+          !paymentDetails?.bankName)
+      ) {
+        validationError = "Missing bank transfer details";
+      }
+
+      if (validationError) {
+        resolve({
+          success: false,
+          message: validationError,
+        });
+        return;
+      }
+
       // Simulate a 95% success rate
       const success = Math.random() < 0.95;
 
       if (success) {
+        // Generate a more realistic transaction ID
+        const getRandomDigits = (length) =>
+          Math.random()
+            .toString()
+            .substring(2, 2 + length);
+        const now = new Date();
+        const transactionId = `TX${now.getFullYear()}${String(
+          now.getMonth() + 1
+        ).padStart(2, "0")}${getRandomDigits(10)}`;
+
         resolve({
           success: true,
-          transactionId:
-            "TX-" + Math.random().toString(36).substring(2, 15).toUpperCase(),
+          transactionId,
           message: "Payment processed successfully",
         });
       } else {
+        // Provide more specific error messages
+        const errorTypes = [
+          "Payment declined by processor",
+          "Insufficient funds",
+          "Card verification failed",
+          "Card expired",
+          "Payment rejected due to security checks",
+        ];
+        const errorMessage =
+          errorTypes[Math.floor(Math.random() * errorTypes.length)];
+
         resolve({
           success: false,
-          message: "Payment declined by processor",
+          message: errorMessage,
         });
       }
-    }, 1000);
+    }, processingTime);
   });
 };

@@ -46,7 +46,32 @@ export const getProducts = async (req, res) => {
       });
     }
 
+    console.log(
+      `Attempting to fetch products with page ${page}, limit ${limit}`
+    );
     const products = await productService.getAllProducts(page, limit);
+
+    // Log pagination info
+    console.log(
+      `Found ${products.data?.length || 0} products. Pagination info:`,
+      products.pagination
+    );
+
+    // Check for empty data array
+    if (!products.data || products.data.length === 0) {
+      console.log(
+        `Warning: Empty products array returned. Total products in DB: ${
+          products.pagination?.total || 0
+        }`
+      );
+
+      // Try to investigate why we have no products if total > 0
+      if (products.pagination?.total > 0) {
+        console.log(
+          "Strange situation: Pagination shows products exist but none were returned"
+        );
+      }
+    }
 
     // Always return success true, even if no products are found
     return res.status(200).json({
