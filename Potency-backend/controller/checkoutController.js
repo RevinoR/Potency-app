@@ -1,9 +1,10 @@
 // controller/checkoutController.js
 import * as cartServices from "../services/cartServices.js";
 import * as orderServices from "../services/orderServices.js";
+import { query } from "../src/db.js";
 
 /**
- * Validate cart for checkout
+ * Validate cart for checkout with improved error handling
  * @param {Object} req - Request object
  * @param {Object} res - Response object
  */
@@ -55,11 +56,14 @@ export const validateCheckout = async (req, res) => {
 };
 
 /**
- * Process checkout and create order
+ * Process checkout and create order with improved transaction handling
  * @param {Object} req - Request object
  * @param {Object} res - Response object
  */
 export const processCheckout = async (req, res) => {
+  // Begin global transaction
+  const client = await query("BEGIN");
+
   try {
     const userId = req.user.id;
     const { name, email, phone, address, paymentMethod, paymentDetails } =
@@ -67,6 +71,7 @@ export const processCheckout = async (req, res) => {
 
     // Validate required fields
     if (!name || !email || !phone || !address || !paymentMethod) {
+      await query("ROLLBACK");
       return res.status(400).json({
         success: false,
         message: "Missing required checkout information",
@@ -76,6 +81,7 @@ export const processCheckout = async (req, res) => {
     // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
+      await query("ROLLBACK");
       return res.status(400).json({
         success: false,
         message: "Invalid email format",
@@ -85,6 +91,7 @@ export const processCheckout = async (req, res) => {
     // Validate phone number (basic validation)
     const phoneRegex = /^\+?[0-9]{10,15}$/;
     if (!phoneRegex.test(phone.replace(/[\s-]/g, ""))) {
+      await query("ROLLBACK");
       return res.status(400).json({
         success: false,
         message: "Invalid phone number format",
@@ -95,7 +102,8 @@ export const processCheckout = async (req, res) => {
     try {
       await cartServices.validateCartForCheckout(userId);
     } catch (cartError) {
-      // If validation fails, return immediately with the error
+      // If validation fails, rollback and return immediately
+      await query("ROLLBACK");
       console.error("Cart validation error during checkout:", cartError);
 
       return res.status(400).json({
@@ -112,6 +120,7 @@ export const processCheckout = async (req, res) => {
     );
 
     if (!paymentResult.success) {
+      await query("ROLLBACK");
       return res.status(400).json({
         success: false,
         message: `Payment processing failed: ${paymentResult.message}`,
@@ -132,6 +141,9 @@ export const processCheckout = async (req, res) => {
     // Orders were created successfully, clear the cart
     await cartServices.clearCart(userId);
 
+    // Everything succeeded, commit the transaction
+    await query("COMMIT");
+
     res.status(201).json({
       success: true,
       data: {
@@ -145,6 +157,8 @@ export const processCheckout = async (req, res) => {
       message: "Order placed successfully",
     });
   } catch (error) {
+    // Rollback transaction on any error
+    await query("ROLLBACK");
     console.error("Error in processCheckout:", error);
 
     // Send more specific error messages based on error type
@@ -187,7 +201,7 @@ export const processCheckout = async (req, res) => {
 };
 
 /**
- * Simulate payment processing with more realistic behavior
+ * Simulate payment processing with more realistic behavior and improved error handling
  * @param {string} paymentMethod - Payment method
  * @param {Object} paymentDetails - Payment details
  * @returns {Promise<Object>} - Payment result
@@ -211,6 +225,12 @@ const simulatePaymentProcessing = async (paymentMethod, paymentDetails) => {
           !paymentDetails?.cvv
         ) {
           validationError = "Missing required credit card details";
+        } else if (
+          !/^[0-9]{13,19}$/.test(paymentDetails.cardNumber.replace(/\s/g, ""))
+        ) {
+          validationError = "Invalid card number format";
+        } else if (!/^[0-9]{3,4}$/.test(paymentDetails.cvv)) {
+          validationError = "Invalid CVV format";
         }
       } else if (paymentMethod === "paypal" && !paymentDetails?.email) {
         validationError = "Missing PayPal email";

@@ -12,23 +12,16 @@ export const createTransaction = async (transactionData) => {
     product_id,
     order_id,
     admin_id = null,
-    payment_method,
-    payment_id = null,
+    // Remove payment_method and payment_id from insert since these columns don't exist
   } = transactionData;
 
+  // SQL query modified to match actual database schema
   const q = {
     text: `INSERT INTO "Transaction" 
-           (user_id, date, product_id, order_id, admin_id, payment_method, payment_id)
-           VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6)
+           (user_id, date, product_id, order_id, admin_id)
+           VALUES ($1, CURRENT_DATE, $2, $3, $4)
            RETURNING *`,
-    values: [
-      user_id,
-      product_id,
-      order_id,
-      admin_id,
-      payment_method,
-      payment_id,
-    ],
+    values: [user_id, product_id, order_id, admin_id],
   };
 
   return query(q.text, q.values);
@@ -108,22 +101,13 @@ export const getTransactions = async (limit = 10, offset = 0) => {
 };
 
 /**
- * Update transaction payment status
- * @param {number} transactionId - Transaction ID
- * @param {string} paymentStatus - New payment status
- * @returns {Promise} - Updated transaction
+ * Get transaction count
+ * @returns {Promise} - Count of transactions
  */
-export const updateTransactionPaymentStatus = async (
-  transactionId,
-  paymentStatus
-) => {
+export const getTransactionCount = async () => {
   const q = {
-    text: `UPDATE "Transaction"
-           SET payment_status = $1
-           WHERE transaction_id = $2
-           RETURNING *`,
-    values: [paymentStatus, transactionId],
+    text: `SELECT COUNT(*) FROM "Transaction"`,
   };
 
-  return query(q.text, q.values);
+  return query(q.text);
 };

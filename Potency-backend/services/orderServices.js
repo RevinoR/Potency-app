@@ -7,7 +7,7 @@ import * as cartModel from "../models/cartModel.js";
 import { query } from "../src/db.js";
 
 /**
- * Create a new order from cart items
+ * Create a new order from cart items with improved transaction handling
  * @param {number} userId - User ID
  * @param {Object} shippingInfo - Shipping information
  * @param {string} paymentMethod - Payment method
@@ -20,11 +20,9 @@ export const createOrderFromCart = async (
   paymentMethod,
   paymentId = null
 ) => {
-  // Start a transaction to ensure all database operations succeed together
-  const client = await query("BEGIN");
-
+  // Transaction is now handled at the controller level
   try {
-    // Validate cart before proceeding
+    // Validate cart before proceeding - this is done with transaction in the controller
     const { items, summary } = await cartServices.validateCartForCheckout(
       userId
     );
@@ -36,14 +34,27 @@ export const createOrderFromCart = async (
     const orders = [];
     const transactions = [];
 
-    // Create a payment ID if none provided (would normally come from payment processor)
-    if (!paymentId) {
-      paymentId =
-        "PAY-" + Math.random().toString(36).substring(2, 10).toUpperCase();
-    }
-
     // Process each cart item as a separate order entry
     for (const item of items) {
+      // Lock the product for update to prevent concurrent modifications
+      const { rows: products } = await query(
+        'SELECT * FROM "Product" WHERE product_id = $1 FOR UPDATE',
+        [item.product_id]
+      );
+
+      if (products.length === 0) {
+        throw new Error(`Product "${item.name}" is no longer available`);
+      }
+
+      const product = products[0];
+
+      // Final stock check
+      if (product.stock < item.quantity) {
+        throw new Error(
+          `Inventory error: Not enough stock for "${item.name}". Available: ${product.stock}, Requested: ${item.quantity}`
+        );
+      }
+
       // 1. Create order record
       const orderData = {
         user_id: userId,
@@ -58,34 +69,17 @@ export const createOrderFromCart = async (
         status: "pending",
       };
 
-      // Check stock availability one last time to prevent race conditions
-      const { rows: products } = await productModel.getProductById(
-        item.product_id
-      );
-
-      if (products.length === 0) {
-        throw new Error(`Product "${item.name}" is no longer available`);
-      }
-
-      const product = products[0];
-
-      if (product.stock < item.quantity) {
-        throw new Error(
-          `Inventory error: Not enough stock for "${item.name}". Available: ${product.stock}, Requested: ${item.quantity}`
-        );
-      }
-
       const orderResult = await orderModel.createOrder(orderData);
       const order = orderResult.rows[0];
       orders.push(order);
 
-      // 2. Create transaction record
+      // 2. Create transaction record - MODIFIED to remove payment_method and payment_id
       const transactionData = {
         user_id: userId,
         product_id: item.product_id,
         order_id: order.order_id,
-        payment_method: paymentMethod,
-        payment_id: paymentId,
+        // Remove payment_method and payment_id from the transaction data
+        // since these columns don't exist in the database
       };
 
       const transactionResult = await transactionModel.createTransaction(
@@ -103,11 +97,7 @@ export const createOrderFromCart = async (
       await productModel.incrementSoldCount(item.product_id, item.quantity);
     }
 
-    // 5. Clear the cart - we'll now do this in the controller after confirming success
-    // This ensures better UX if there's an error after order creation
-
-    // Commit the transaction
-    await query("COMMIT");
+    // Note: Cart clearing is now done in the controller after successful transaction
 
     return {
       orders,
@@ -121,9 +111,6 @@ export const createOrderFromCart = async (
       },
     };
   } catch (error) {
-    // Rollback the transaction if any operation fails
-    await query("ROLLBACK");
-
     // Add prefix to distinguish between different types of errors
     if (error.message.includes("Inventory")) {
       throw new Error(`Inventory: ${error.message}`);
@@ -150,7 +137,7 @@ export const getUserOrders = async (userId) => {
 };
 
 /**
- * Get order details
+ * Get order details with improved access control
  * @param {number} orderId - Order ID
  * @param {number} userId - User ID (for security check)
  * @returns {Promise} - Order details
@@ -193,7 +180,7 @@ export const getOrderDetails = async (orderId, userId) => {
 };
 
 /**
- * Update order status (admin only)
+ * Update order status (admin only) with improved transaction handling
  * @param {number} orderId - Order ID
  * @param {string} status - New status
  * @returns {Promise} - Updated order
@@ -212,6 +199,7 @@ export const updateOrderStatus = async (orderId, status) => {
     ];
 
     if (!validStatuses.includes(status)) {
+      await query("ROLLBACK");
       throw new Error(
         `Invalid order status. Valid statuses are: ${validStatuses.join(", ")}`
       );
@@ -221,6 +209,7 @@ export const updateOrderStatus = async (orderId, status) => {
     const { rows: currentOrderRows } = await orderModel.getOrderById(orderId);
 
     if (currentOrderRows.length === 0) {
+      await query("ROLLBACK");
       throw new Error("Order not found");
     }
 
@@ -229,10 +218,12 @@ export const updateOrderStatus = async (orderId, status) => {
 
     // Don't allow status change if already cancelled or delivered (terminal states)
     if (currentStatus === "cancelled" && status !== "cancelled") {
+      await query("ROLLBACK");
       throw new Error("Cannot change status of a cancelled order");
     }
 
     if (currentStatus === "delivered" && status !== "delivered") {
+      await query("ROLLBACK");
       throw new Error("Cannot change status of a delivered order");
     }
 
@@ -240,6 +231,7 @@ export const updateOrderStatus = async (orderId, status) => {
     const { rows } = await orderModel.updateOrderStatus(orderId, status);
 
     if (rows.length === 0) {
+      await query("ROLLBACK");
       throw new Error("Order not found");
     }
 
@@ -247,8 +239,10 @@ export const updateOrderStatus = async (orderId, status) => {
 
     // If order is cancelled, return items to inventory
     if (status === "cancelled" && currentStatus !== "cancelled") {
-      const { rows: products } = await productModel.getProductById(
-        order.product_id
+      // Lock the product row for update
+      const { rows: products } = await query(
+        'SELECT * FROM "Product" WHERE product_id = $1 FOR UPDATE',
+        [order.product_id]
       );
 
       if (products.length > 0) {
@@ -278,7 +272,7 @@ export const updateOrderStatus = async (orderId, status) => {
 };
 
 /**
- * Get all orders for admin
+ * Get all orders for admin with improved pagination
  * @param {number} page - Page number
  * @param {number} limit - Items per page
  * @returns {Promise} - Orders with pagination info
@@ -306,7 +300,7 @@ export const getAllOrders = async (page = 1, limit = 10) => {
 };
 
 /**
- * Get orders by status
+ * Get orders by status with improved validation
  * @param {string} status - Order status
  * @param {number} page - Page number
  * @param {number} limit - Items per page

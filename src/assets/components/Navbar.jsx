@@ -344,7 +344,7 @@ const Navbar = forwardRef(({ onCartClick }, ref) => {
                   className="text-black hover:text-gray-600"
                   title="My Orders"
                 >
-                  Orders
+                  Orders History
                 </Link>
                 <button
                   onClick={handleLogout}

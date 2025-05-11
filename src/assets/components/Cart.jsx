@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faTrash,
@@ -8,19 +8,23 @@ import {
   faExclamationTriangle,
   faShoppingBasket,
   faSync,
+  faImage,
 } from "@fortawesome/free-solid-svg-icons";
+import { toast, ToastContainer } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
 import axios from "axios";
 
 const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
+  // Consolidated state management
   const [cart, setCart] = useState({
     items: [],
     summary: { subtotal: 0, tax: 0, total: 0, itemCount: 0 },
   });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [networkError, setNetworkError] = useState(false);
-  const [retryCount, setRetryCount] = useState(0);
-  const abortControllerRef = useRef(null);
+  const [status, setStatus] = useState({
+    loading: true,
+    error: null,
+    networkError: false,
+  });
 
   // Format number as currency
   const formatCurrency = (amount) => {
@@ -31,112 +35,130 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
     }).format(amount);
   };
 
-  // Fetch cart data with improved error handling
-  const fetchCart = async (retry = false) => {
+  // Simplified fetch cart logic
+  const fetchCart = async (showRefreshToast = false) => {
     try {
-      setLoading(true);
-      setError(null);
-      setNetworkError(false);
+      setStatus({ loading: true, error: null, networkError: false });
 
       const token = localStorage.getItem("token");
       if (!token) {
-        setError("You must be logged in to view your cart");
-        setLoading(false);
+        setStatus({
+          loading: false,
+          error: "You must be logged in to view your cart",
+          networkError: false,
+        });
+        toast.error("You must be logged in to view your cart");
         return;
       }
 
-      // Cancel any existing request
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-
-      // Create new abort controller
-      abortControllerRef.current = new AbortController();
-
-      // Set timeout to prevent hanging requests
-      const timeoutId = setTimeout(() => {
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-        }
-      }, 8000);
-
       const response = await axios.get("/api/cart", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        signal: abortControllerRef.current.signal,
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 8000, // Set a reasonable timeout
       });
-
-      clearTimeout(timeoutId);
 
       if (response.data && response.data.data) {
         setCart(response.data.data);
-
-        // Reset retry count on successful fetch
-        if (retry) {
-          setRetryCount(0);
-        }
 
         // Notify parent component to update cart count
         if (onCartUpdated) {
           onCartUpdated();
         }
+
+        // Show refresh toast if requested
+        if (showRefreshToast) {
+          toast.success("Cart refreshed successfully");
+        }
       } else {
-        setError("Failed to load cart data");
+        setStatus({
+          loading: false,
+          error: "Failed to load cart data",
+          networkError: false,
+        });
+        toast.error("Failed to load cart data");
       }
     } catch (err) {
       console.error("Error fetching cart:", err);
 
-      if (err.name === "AbortError") {
-        setError("Request timed out. Please try again.");
+      if (err.code === "ECONNABORTED" || err.name === "TimeoutError") {
+        setStatus({
+          loading: false,
+          error: "Request timed out. Please try again.",
+          networkError: false,
+        });
+        toast.error("Request timed out. Please try again.");
       } else if (err.code === "ERR_NETWORK") {
-        setNetworkError(true);
+        setStatus({ loading: false, error: null, networkError: true });
+        toast.error("Network error. Please check your connection.");
       } else {
-        setError(err.response?.data?.message || "Failed to load cart");
+        const errorMessage =
+          err.response?.data?.message || "Failed to load cart";
+        setStatus({
+          loading: false,
+          error: errorMessage,
+          networkError: false,
+        });
+        toast.error(errorMessage);
       }
     } finally {
-      setLoading(false);
+      setStatus((prev) => ({ ...prev, loading: false }));
     }
   };
 
-  // Update item quantity with error handling
+  // Update item quantity with optimistic updates
   const updateQuantity = async (cartItemId, newQuantity) => {
     try {
       const token = localStorage.getItem("token");
-      if (!token) return;
+      if (!token) {
+        toast.error("You must be logged in");
+        return;
+      }
+
+      // Find the item to update
+      const itemToUpdate = cart.items.find(
+        (item) => item.cart_item_id === cartItemId
+      );
+      if (!itemToUpdate) return;
+
+      // Show a message if trying to exceed stock
+      if (newQuantity > itemToUpdate.stock) {
+        toast.warning(`Maximum stock available is ${itemToUpdate.stock}`);
+        return;
+      }
 
       // Optimistically update UI
-      const updatedCart = {
-        ...cart,
-        items: cart.items.map((item) =>
+      setCart((prevCart) => ({
+        ...prevCart,
+        items: prevCart.items.map((item) =>
           item.cart_item_id === cartItemId
             ? { ...item, quantity: newQuantity, isUpdating: true }
             : item
         ),
-      };
-      setCart(updatedCart);
+      }));
 
       await axios.put(
         `/api/cart/${cartItemId}`,
-        {
-          quantity: newQuantity,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+        { quantity: newQuantity },
+        { headers: { Authorization: `Bearer ${token}` } }
       );
 
       // Refresh cart data to get updated totals
       fetchCart();
+      toast.success("Cart updated");
     } catch (err) {
       console.error("Error updating quantity:", err);
 
       if (err.code === "ERR_NETWORK") {
-        setNetworkError(true);
+        setStatus({ loading: false, error: null, networkError: true });
+        toast.error("Network error. Please check your connection.");
       } else {
-        setError(err.response?.data?.message || "Failed to update quantity");
+        const errorMessage =
+          err.response?.data?.message || "Failed to update quantity";
+        setStatus({
+          loading: false,
+          error: errorMessage,
+          networkError: false,
+        });
+        toast.error(errorMessage);
       }
 
       // Revert to original cart state on error
@@ -144,34 +166,51 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
     }
   };
 
-  // Remove item from cart with error handling
+  // Remove item from cart with optimistic updates
   const removeItem = async (cartItemId) => {
     try {
       const token = localStorage.getItem("token");
-      if (!token) return;
+      if (!token) {
+        toast.error("You must be logged in");
+        return;
+      }
+
+      // Get item info for toast
+      const itemToRemove = cart.items.find(
+        (item) => item.cart_item_id === cartItemId
+      );
+      const itemName = itemToRemove?.name || "Item";
 
       // Optimistically update UI
-      const updatedCart = {
-        ...cart,
-        items: cart.items.filter((item) => item.cart_item_id !== cartItemId),
-      };
-      setCart(updatedCart);
+      setCart((prevCart) => ({
+        ...prevCart,
+        items: prevCart.items.filter(
+          (item) => item.cart_item_id !== cartItemId
+        ),
+      }));
 
       await axios.delete(`/api/cart/${cartItemId}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
 
       // Refresh cart data
       fetchCart();
+      toast.success(`${itemName} removed from cart`);
     } catch (err) {
       console.error("Error removing item:", err);
 
       if (err.code === "ERR_NETWORK") {
-        setNetworkError(true);
+        setStatus({ loading: false, error: null, networkError: true });
+        toast.error("Network error. Please check your connection.");
       } else {
-        setError(err.response?.data?.message || "Failed to remove item");
+        const errorMessage =
+          err.response?.data?.message || "Failed to remove item";
+        setStatus({
+          loading: false,
+          error: errorMessage,
+          networkError: false,
+        });
+        toast.error(errorMessage);
       }
 
       // Revert to original cart state on error
@@ -179,11 +218,14 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
     }
   };
 
-  // Clear entire cart with error handling
+  // Clear entire cart
   const clearCart = async () => {
     try {
       const token = localStorage.getItem("token");
-      if (!token) return;
+      if (!token) {
+        toast.error("You must be logged in");
+        return;
+      }
 
       // Confirm before clearing
       if (!window.confirm("Are you sure you want to clear your cart?")) {
@@ -197,20 +239,27 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
       });
 
       await axios.delete("/api/cart", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
 
       // Refresh cart data
       fetchCart();
+      toast.success("Cart cleared successfully");
     } catch (err) {
       console.error("Error clearing cart:", err);
 
       if (err.code === "ERR_NETWORK") {
-        setNetworkError(true);
+        setStatus({ loading: false, error: null, networkError: true });
+        toast.error("Network error. Please check your connection.");
       } else {
-        setError(err.response?.data?.message || "Failed to clear cart");
+        const errorMessage =
+          err.response?.data?.message || "Failed to clear cart";
+        setStatus({
+          loading: false,
+          error: errorMessage,
+          networkError: false,
+        });
+        toast.error(errorMessage);
       }
 
       // Revert to original cart state on error
@@ -221,34 +270,36 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
   // Fetch cart on component mount
   useEffect(() => {
     fetchCart();
-
-    // Clean up on unmount
-    return () => {
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-    };
   }, []);
-
-  // Handle retry logic
-  const handleRetry = () => {
-    // Increment retry count to track attempts
-    setRetryCount((prev) => prev + 1);
-    fetchCart(true);
-  };
 
   // Handle checkout button click
   const handleCheckout = () => {
     if (cart.items.length === 0) {
-      setError("Your cart is empty");
+      setStatus((prev) => ({ ...prev, error: "Your cart is empty" }));
+      toast.error("Your cart is empty");
       return;
     }
-
     onProceedToCheckout();
   };
 
+  // Handle refresh button click
+  const handleRefresh = () => {
+    fetchCart(true); // Show refresh toast
+  };
+
+  // Render a placeholder for missing images
+  const renderImagePlaceholder = (itemName) => (
+    <div className="w-full h-full flex flex-col items-center justify-center bg-gray-200 text-gray-400">
+      <FontAwesomeIcon icon={faImage} className="text-2xl mb-1" />
+      <span className="text-xs text-center px-1 truncate w-full">
+        {itemName}
+      </span>
+    </div>
+  );
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+      <ToastContainer position="top-right" autoClose={3000} />
       <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center p-6 border-b">
           <button
@@ -261,12 +312,13 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
           <h2 className="text-xl font-medium">Your Cart</h2>
         </div>
 
-        {loading ? (
+        {/* Loading state */}
+        {status.loading ? (
           <div className="p-12 text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto"></div>
             <p className="mt-4 text-gray-600">Loading your cart...</p>
           </div>
-        ) : networkError ? (
+        ) : status.networkError ? (
           <div className="p-12 text-center">
             <FontAwesomeIcon
               icon={faExclamationTriangle}
@@ -278,18 +330,18 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
               internet connection.
             </p>
             <button
-              onClick={handleRetry}
+              onClick={handleRefresh}
               className="flex items-center justify-center mx-auto px-4 py-2 bg-amber-500 text-white rounded hover:bg-amber-600"
             >
               <FontAwesomeIcon icon={faSync} className="mr-2" />
-              Retry Connection ({retryCount})
+              Retry Connection
             </button>
           </div>
-        ) : error ? (
+        ) : status.error ? (
           <div className="p-12 text-center">
-            <p className="text-red-500 mb-4">{error}</p>
+            <p className="text-red-500 mb-4">{status.error}</p>
             <button
-              onClick={handleRetry}
+              onClick={handleRefresh}
               className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded"
             >
               Try Again
@@ -307,7 +359,7 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
             </p>
             <button
               onClick={onClose}
-              className="px-6 py-2 bg-black text-white hover:bg-gray-800"
+              className="px-6 py-2 bg-black text-white hover:bg-gray-800 rounded"
             >
               Continue Shopping
             </button>
@@ -322,24 +374,32 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
                     item.isUpdating ? "opacity-60" : ""
                   }`}
                 >
-                  <div className="w-20 h-20 bg-gray-200 mr-4 flex-shrink-0">
+                  {/* Product Image */}
+                  <div className="w-20 h-20 bg-gray-200 mr-4 flex-shrink-0 overflow-hidden rounded">
                     {item.image ? (
                       <img
                         src={`data:image/jpeg;base64,${item.image}`}
                         alt={item.name}
                         className="w-full h-full object-cover"
+                        onError={(e) => {
+                          e.target.onerror = null;
+                          e.target.parentElement.innerHTML =
+                            renderImagePlaceholder(item.name).outerHTML;
+                        }}
                       />
                     ) : (
-                      <div className="w-full h-full flex items-center justify-center text-gray-400">
-                        No image
-                      </div>
+                      renderImagePlaceholder(item.name)
                     )}
                   </div>
 
+                  {/* Product Details */}
                   <div className="flex-grow">
-                    <h3 className="font-medium">{item.name}</h3>
-                    <p className="text-sm text-gray-600">{item.subtitle}</p>
+                    <h3 className="font-medium text-black">{item.name}</h3>
+                    <p className="text-sm text-gray-600">
+                      {item.subtitle || "Product"}
+                    </p>
                     <div className="mt-2 flex justify-between items-center">
+                      {/* Quantity Controls */}
                       <div className="flex items-center">
                         <button
                           onClick={() =>
@@ -348,19 +408,20 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
                               Math.max(1, item.quantity - 1)
                             )
                           }
-                          className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded-l"
+                          className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded-l hover:bg-gray-100"
                           disabled={item.isUpdating}
+                          aria-label="Decrease quantity"
                         >
                           <FontAwesomeIcon icon={faMinus} />
                         </button>
-                        <span className="w-10 h-8 flex items-center justify-center border-t border-b border-gray-300">
+                        <span className="w-10 h-8 flex items-center justify-center border-t border-b border-gray-300 text-black">
                           {item.quantity}
                         </span>
                         <button
                           onClick={() =>
                             updateQuantity(item.cart_item_id, item.quantity + 1)
                           }
-                          className={`w-8 h-8 flex items-center justify-center border border-gray-300 rounded-r ${
+                          className={`w-8 h-8 flex items-center justify-center border border-gray-300 rounded-r hover:bg-gray-100 ${
                             item.quantity >= item.stock
                               ? "opacity-50 cursor-not-allowed"
                               : ""
@@ -373,14 +434,17 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
                               ? `Max stock: ${item.stock}`
                               : ""
                           }
+                          aria-label="Increase quantity"
                         >
                           <FontAwesomeIcon icon={faPlus} />
                         </button>
                       </div>
+                      {/* Remove Button */}
                       <button
                         onClick={() => removeItem(item.cart_item_id)}
                         className="text-red-500 hover:text-red-700"
                         disabled={item.isUpdating}
+                        aria-label="Remove item"
                       >
                         <FontAwesomeIcon icon={faTrash} />
                       </button>
@@ -392,42 +456,68 @@ const Cart = ({ onClose, onProceedToCheckout, onCartUpdated }) => {
                     )}
                   </div>
 
+                  {/* Price Information */}
                   <div className="ml-4 text-right">
-                    <p className="font-medium">{formatCurrency(item.price)}</p>
+                    <p className="font-medium text-black">
+                      {formatCurrency(item.price)}
+                    </p>
                     <p className="text-sm text-gray-600">
                       {item.quantity} × {formatCurrency(item.price)}
+                    </p>
+                    <p className="text-sm font-medium text-black mt-1">
+                      {formatCurrency(item.price * item.quantity)}
                     </p>
                   </div>
                 </div>
               ))}
 
+              {/* Cart Actions */}
               <div className="flex justify-end mt-4">
-                <button
-                  onClick={clearCart}
-                  className="text-sm text-red-500 hover:text-red-700"
-                >
-                  Clear cart
-                </button>
+                <div className="flex gap-4">
+                  <button
+                    onClick={handleRefresh}
+                    className="text-sm text-gray-500 hover:text-gray-700 flex items-center"
+                    aria-label="Refresh cart"
+                  >
+                    <FontAwesomeIcon icon={faSync} className="mr-1" />
+                    Refresh
+                  </button>
+                  <button
+                    onClick={clearCart}
+                    className="text-sm text-red-500 hover:text-red-700"
+                    aria-label="Clear cart"
+                  >
+                    Clear cart
+                  </button>
+                </div>
               </div>
             </div>
 
+            {/* Order Summary */}
             <div className="p-6 bg-gray-50">
               <div className="flex justify-between mb-2">
-                <span>Subtotal</span>
-                <span>{formatCurrency(cart.summary.subtotal)}</span>
+                <span className="text-gray-700">Subtotal</span>
+                <span className="text-black font-medium">
+                  {formatCurrency(cart.summary.subtotal)}
+                </span>
               </div>
               <div className="flex justify-between mb-2">
-                <span>Tax (10%)</span>
-                <span>{formatCurrency(cart.summary.tax)}</span>
+                <span className="text-gray-700">Tax (10%)</span>
+                <span className="text-black">
+                  {formatCurrency(cart.summary.tax)}
+                </span>
               </div>
-              <div className="flex justify-between font-medium text-lg mb-6">
-                <span>Total</span>
-                <span>{formatCurrency(cart.summary.total)}</span>
+              <div className="flex justify-between font-medium text-lg mb-6 pt-3 border-t border-gray-200">
+                <span className="text-black">Total</span>
+                <span className="text-black">
+                  {formatCurrency(cart.summary.total)}
+                </span>
               </div>
 
               <button
                 onClick={handleCheckout}
-                className="w-full py-3 bg-black text-white font-medium hover:bg-gray-800"
+                className="w-full py-3 bg-black text-white font-medium hover:bg-gray-800 rounded"
+                disabled={cart.items.length === 0}
               >
                 Proceed to Checkout
               </button>

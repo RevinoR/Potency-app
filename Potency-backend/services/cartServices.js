@@ -1,30 +1,32 @@
 // services/cartServices.js
 import * as cartModel from "../models/cartModel.js";
 import * as productModel from "../models/productModel.js";
+import { query } from "../src/db.js";
 
 /**
- * Add a product to the cart
+ * Add a product to the cart with improved transaction handling
  * @param {number} userId - User ID
  * @param {number} productId - Product ID
  * @param {number} quantity - Quantity to add
  * @returns {Promise} - Updated cart
  */
 export const addToCart = async (userId, productId, quantity) => {
+  // Begin transaction to ensure consistency
+  const client = await query("BEGIN");
+
   try {
-    // Check if product exists and has enough stock
-    const { rows: products } = await productModel.getProductById(productId);
+    // Check if product exists and has enough stock with FOR UPDATE to lock the row
+    const { rows: products } = await query(
+      'SELECT * FROM "Product" WHERE product_id = $1 FOR UPDATE',
+      [productId]
+    );
 
     if (products.length === 0) {
+      await query("ROLLBACK");
       throw new Error("Product not found");
     }
 
     const product = products[0];
-
-    if (product.stock < quantity) {
-      throw new Error(
-        `Not enough stock available. Only ${product.stock} items left.`
-      );
-    }
 
     // Get existing cart item if any
     const { rows: cartItems } = await cartModel.getCartItemByUserAndProduct(
@@ -36,8 +38,9 @@ export const addToCart = async (userId, productId, quantity) => {
     const existingQuantity = cartItems.length > 0 ? cartItems[0].quantity : 0;
     const newTotalQuantity = existingQuantity + quantity;
 
-    // Recheck stock availability with total quantity
+    // Validate stock availability
     if (product.stock < newTotalQuantity) {
+      await query("ROLLBACK");
       throw new Error(
         `Not enough stock available. Only ${product.stock} items left (you already have ${existingQuantity} in your cart).`
       );
@@ -45,8 +48,14 @@ export const addToCart = async (userId, productId, quantity) => {
 
     // Add to cart
     const result = await cartModel.addCartItem(userId, productId, quantity);
+
+    // Commit transaction
+    await query("COMMIT");
+
     return result.rows[0];
   } catch (error) {
+    // Rollback transaction on any error
+    await query("ROLLBACK");
     throw new Error(`CartService.addToCart: ${error.message}`);
   }
 };
@@ -62,12 +71,19 @@ export const getCart = async (userId) => {
 
     // Calculate totals
     let subtotal = 0;
+    let itemCount = 0;
+
     cartItems.forEach((item) => {
-      item.total = item.price * item.quantity;
+      // Ensure valid quantity and price
+      const quantity = parseInt(item.quantity) || 0;
+      const price = parseFloat(item.price) || 0;
+
+      item.total = price * quantity;
       subtotal += item.total;
+      itemCount += quantity;
     });
 
-    // Assuming tax rate of 10%
+    // Calculate tax (10%)
     const taxRate = 0.1;
     const tax = subtotal * taxRate;
     const total = subtotal + tax;
@@ -78,7 +94,7 @@ export const getCart = async (userId) => {
         subtotal,
         tax,
         total,
-        itemCount: cartItems.length,
+        itemCount,
       },
     };
   } catch (error) {
@@ -87,13 +103,16 @@ export const getCart = async (userId) => {
 };
 
 /**
- * Update cart item quantity
+ * Update cart item quantity with transaction
  * @param {number} userId - User ID
  * @param {number} cartItemId - Cart Item ID
  * @param {number} quantity - New quantity
  * @returns {Promise} - Updated cart item
  */
 export const updateCartItem = async (userId, cartItemId, quantity) => {
+  // Begin transaction
+  const client = await query("BEGIN");
+
   try {
     // First, get the cart item to verify ownership and get product details
     const { rows: cartItems } = await cartModel.getCartItems(userId);
@@ -102,21 +121,26 @@ export const updateCartItem = async (userId, cartItemId, quantity) => {
     );
 
     if (!cartItem) {
+      await query("ROLLBACK");
       throw new Error("Cart item not found or does not belong to user");
     }
 
-    // Check stock availability
-    const { rows: products } = await productModel.getProductById(
-      cartItem.product_id
+    // Check stock availability with row locking
+    const { rows: products } = await query(
+      'SELECT * FROM "Product" WHERE product_id = $1 FOR UPDATE',
+      [cartItem.product_id]
     );
 
     if (products.length === 0) {
+      await query("ROLLBACK");
       throw new Error("Product not found");
     }
 
     const product = products[0];
 
+    // Validate stock
     if (product.stock < quantity) {
+      await query("ROLLBACK");
       throw new Error(
         `Not enough stock available. Only ${product.stock} items left.`
       );
@@ -124,8 +148,14 @@ export const updateCartItem = async (userId, cartItemId, quantity) => {
 
     // Update quantity
     const result = await cartModel.updateCartItemQuantity(cartItemId, quantity);
+
+    // Commit transaction
+    await query("COMMIT");
+
     return result.rows[0];
   } catch (error) {
+    // Rollback transaction on any error
+    await query("ROLLBACK");
     throw new Error(`CartService.updateCartItem: ${error.message}`);
   }
 };
@@ -165,25 +195,33 @@ export const clearCart = async (userId) => {
 };
 
 /**
- * Validate cart for checkout
+ * Validate cart for checkout with enhanced validation
  * @param {number} userId - User ID
  * @returns {Promise} - Validated cart data or error
  */
 export const validateCartForCheckout = async (userId) => {
-  try {
-    const { items, summary } = await getCart(userId);
+  // Begin transaction to ensure consistent reads
+  const client = await query("BEGIN");
 
-    if (items.length === 0) {
+  try {
+    // Get cart with current items
+    const { rows: cartItems } = await cartModel.getCartItems(userId);
+
+    if (cartItems.length === 0) {
+      await query("ROLLBACK");
       throw new Error("Cart is empty");
     }
 
-    // Check stock for each item
+    // Check stock and price for each item with row locking
     const stockIssues = [];
     const invalidItems = [];
+    let subtotal = 0;
 
-    for (const item of items) {
-      const { rows: products } = await productModel.getProductById(
-        item.product_id
+    for (const item of cartItems) {
+      // Lock the product row to ensure consistent validation
+      const { rows: products } = await query(
+        'SELECT * FROM "Product" WHERE product_id = $1 FOR UPDATE',
+        [item.product_id]
       );
 
       if (products.length === 0) {
@@ -200,6 +238,7 @@ export const validateCartForCheckout = async (userId) => {
 
       const product = products[0];
 
+      // Check stock availability
       if (product.stock < item.quantity) {
         const issue = `Not enough stock for "${item.name}". Available: ${product.stock}, Requested: ${item.quantity}`;
         stockIssues.push(issue);
@@ -214,7 +253,7 @@ export const validateCartForCheckout = async (userId) => {
       }
 
       // Check if price has changed
-      if (product.price !== item.price) {
+      if (parseFloat(product.price) !== parseFloat(item.price)) {
         const issue = `Price for "${item.name}" has changed from ${item.price} to ${product.price}`;
         stockIssues.push(issue);
         invalidItems.push({
@@ -226,9 +265,13 @@ export const validateCartForCheckout = async (userId) => {
           message: issue,
         });
       }
+
+      // Calculate subtotal with current item price
+      subtotal += item.price * item.quantity;
     }
 
     if (stockIssues.length > 0) {
+      await query("ROLLBACK");
       const error = new Error(
         `Cart validation failed: ${stockIssues.join("; ")}`
       );
@@ -236,8 +279,26 @@ export const validateCartForCheckout = async (userId) => {
       throw error;
     }
 
-    return { items, summary };
+    // Calculate summary with validated prices
+    const taxRate = 0.1;
+    const tax = subtotal * taxRate;
+    const total = subtotal + tax;
+
+    const summary = {
+      subtotal,
+      tax,
+      total,
+      itemCount: cartItems.length,
+    };
+
+    // Commit transaction
+    await query("COMMIT");
+
+    return { items: cartItems, summary };
   } catch (error) {
+    // Rollback transaction on any error
+    await query("ROLLBACK");
+
     // Pass along any custom error properties
     if (error.invalidItems) {
       throw error;
