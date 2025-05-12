@@ -272,26 +272,88 @@ export const updateOrderStatus = async (orderId, status) => {
 };
 
 /**
- * Get all orders for admin with improved pagination
- * @param {number} page - Page number
- * @param {number} limit - Items per page
+ * Get all orders for admin with improved pagination and filtering
+ * @param {Object} options - Query options
+ * @param {number} options.page - Page number
+ * @param {number} options.limit - Items per page
+ * @param {string} options.status - Filter by status
+ * @param {string} options.search - Search term
+ * @param {string} options.sortBy - Sort field
+ * @param {string} options.sortOrder - Sort order (ASC/DESC)
  * @returns {Promise} - Orders with pagination info
  */
-export const getAllOrders = async (page = 1, limit = 10) => {
+export const getAllOrders = async ({
+  page = 1,
+  limit = 10,
+  status,
+  search,
+  sortBy = "date",
+  sortOrder = "DESC",
+} = {}) => {
   try {
     const offset = (page - 1) * limit;
-    const { rows: orders } = await orderModel.getOrders(limit, offset);
-    const { rows: countResult } = await orderModel.getOrderCount();
 
+    // Build the where clause
+    let whereClause = "";
+    const params = [];
+    let paramCount = 0;
+
+    if (status && status !== "all") {
+      paramCount++;
+      whereClause += `WHERE status = $${paramCount}`;
+      params.push(status);
+    }
+
+    if (search) {
+      paramCount++;
+      const searchCondition = `WHERE (name ILIKE $${paramCount} OR email ILIKE $${paramCount} OR product ILIKE $${paramCount} OR order_id::text ILIKE $${paramCount})`;
+      whereClause = whereClause
+        ? `${whereClause} AND (name ILIKE $${paramCount} OR email ILIKE $${paramCount} OR product ILIKE $${paramCount} OR order_id::text ILIKE $${paramCount})`
+        : searchCondition;
+      params.push(`%${search}%`);
+    }
+
+    // Get total count for pagination
+    const countQuery = `SELECT COUNT(*) as count FROM "Order" ${whereClause}`;
+    const { rows: countResult } = await query(countQuery, params);
     const totalOrders = parseInt(countResult[0].count);
+
+    // Add limit and offset to params
+    paramCount++;
+    params.push(limit);
+    paramCount++;
+    params.push(offset);
+
+    // Get orders with pagination
+    const ordersQuery = `
+      SELECT 
+        order_id,
+        name,
+        email,
+        phone_number,
+        product,
+        price,
+        quantity,
+        status,
+        date,
+        address,
+        user_id,
+        product_id
+      FROM "Order"
+      ${whereClause}
+      ORDER BY ${sortBy} ${sortOrder}
+      LIMIT $${paramCount - 1} OFFSET $${paramCount}
+    `;
+
+    const { rows: orders } = await query(ordersQuery, params);
 
     return {
       orders,
       pagination: {
         total: totalOrders,
-        page,
+        currentPage: page,
+        totalPages: Math.ceil(totalOrders / limit),
         limit,
-        pages: Math.ceil(totalOrders / limit),
       },
     };
   } catch (error) {
@@ -348,5 +410,146 @@ export const getOrdersByStatus = async (status, page = 1, limit = 10) => {
     };
   } catch (error) {
     throw new Error(`OrderService.getOrdersByStatus: ${error.message}`);
+  }
+};
+
+/**
+ * Get order statistics
+ * @returns {Promise} - Order statistics by status
+ */
+export const getOrderStats = async () => {
+  try {
+    // Get total orders count
+    const { rows: totalResult } = await query(
+      'SELECT COUNT(*) as total FROM "Order"'
+    );
+
+    // Get orders count by status
+    const { rows: statusResult } = await query(`
+      SELECT 
+        status,
+        COUNT(*) as count
+      FROM "Order"
+      GROUP BY status
+    `);
+
+    // Initialize stats object
+    const stats = {
+      total: parseInt(totalResult[0].total),
+      pending: 0,
+      processing: 0,
+      shipped: 0,
+      delivered: 0,
+      cancelled: 0,
+    };
+
+    // Populate stats from query results
+    statusResult.forEach((row) => {
+      if (stats.hasOwnProperty(row.status)) {
+        stats[row.status] = parseInt(row.count);
+      }
+    });
+
+    return stats;
+  } catch (error) {
+    throw new Error(`OrderService.getOrderStats: ${error.message}`);
+  }
+};
+
+/**
+ * Update order notes
+ * @param {number} orderId - Order ID
+ * @param {string} notes - Order notes
+ * @returns {Promise} - Updated order
+ */
+export const updateOrderNotes = async (orderId, notes) => {
+  try {
+    // Note: This assumes you have a notes column in your Order table
+    // If you don't have this column, you might need to add it or create a separate OrderNotes table
+    const { rows } = await query(
+      `UPDATE "Order" SET notes = $1 WHERE order_id = $2 RETURNING *`,
+      [notes, orderId]
+    );
+
+    if (rows.length === 0) {
+      throw new Error("Order not found");
+    }
+
+    return rows[0];
+  } catch (error) {
+    throw new Error(`OrderService.updateOrderNotes: ${error.message}`);
+  }
+};
+
+/**
+ * Update order tracking number
+ * @param {number} orderId - Order ID
+ * @param {string} trackingNumber - Tracking number
+ * @returns {Promise} - Updated order
+ */
+export const updateOrderTracking = async (orderId, trackingNumber) => {
+  try {
+    // Note: This assumes you have a tracking_number column in your Order table
+    // If you don't have this column, you might need to add it
+    const { rows } = await query(
+      `UPDATE "Order" SET tracking_number = $1 WHERE order_id = $2 RETURNING *`,
+      [trackingNumber, orderId]
+    );
+
+    if (rows.length === 0) {
+      throw new Error("Order not found");
+    }
+
+    return rows[0];
+  } catch (error) {
+    throw new Error(`OrderService.updateOrderTracking: ${error.message}`);
+  }
+};
+
+/**
+ * Bulk update orders
+ * @param {Array} orderIds - Array of order IDs
+ * @param {string} action - Bulk action (approve, ship, deliver, cancel)
+ * @returns {Promise} - Updated orders
+ */
+export const bulkUpdateOrders = async (orderIds, action) => {
+  try {
+    if (!Array.isArray(orderIds) || orderIds.length === 0) {
+      throw new Error("Order IDs array is required");
+    }
+
+    let status;
+
+    switch (action) {
+      case "approve":
+        status = "processing";
+        break;
+      case "ship":
+        status = "shipped";
+        break;
+      case "deliver":
+        status = "delivered";
+        break;
+      case "cancel":
+        status = "cancelled";
+        break;
+      default:
+        throw new Error(`Invalid action: ${action}`);
+    }
+
+    // Create placeholders for the IN clause
+    const placeholders = orderIds.map((_, index) => `$${index + 2}`).join(",");
+
+    const { rows } = await query(
+      `UPDATE "Order" 
+       SET status = $1 
+       WHERE order_id IN (${placeholders}) 
+       RETURNING order_id, status`,
+      [status, ...orderIds]
+    );
+
+    return rows;
+  } catch (error) {
+    throw new Error(`OrderService.bulkUpdateOrders: ${error.message}`);
   }
 };
