@@ -1,21 +1,32 @@
 // src/models/productModel.js
-import { query } from '../src/db.js';
+import { query } from "../src/db.js";
 
 /**
  * Get all products with pagination
- * @param {number} page - Page number
  * @param {number} limit - Items per page
+ * @param {number} offset - Offset for pagination
  * @returns {Promise} - Paginated products
  */
-export const getAllProducts = async (page = 1, limit = 10) => {
-  const offset = (page - 1) * limit;
+export const getAllProducts = async (limit = 10, offset = 0) => {
   const q = {
     text: 'SELECT * FROM "Product" ORDER BY product_id DESC LIMIT $1 OFFSET $2',
     values: [limit, offset],
   };
-  return query(q.text, q.values); // This should return { rows: [...] }
-};
 
+  // For debugging - log the query being executed
+  console.log(
+    `Executing query: ${q.text} with values [${q.values.join(", ")}]`
+  );
+
+  try {
+    const result = await query(q.text, q.values);
+    console.log(`Query returned ${result.rows.length} products`);
+    return result;
+  } catch (error) {
+    console.error("Error in getAllProducts:", error.message);
+    throw error;
+  }
+};
 
 /**
  * Get total product count
@@ -25,7 +36,14 @@ export const getTotalProductCount = async () => {
   const q = {
     text: 'SELECT COUNT(*) FROM "Product"',
   };
-  return query(q.text);
+  try {
+    const result = await query(q.text);
+    console.log(`Total product count: ${result.rows[0]?.count || 0}`);
+    return result;
+  } catch (error) {
+    console.error("Error in getTotalProductCount:", error.message);
+    throw error;
+  }
 };
 
 /**
@@ -46,7 +64,6 @@ export const getProductById = async (id) => {
  * @param {Object} product - Product object
  * @returns {Promise} - Created product
  */
-// In productModel.js - Update createProduct
 export const createProduct = async (product) => {
   const { name, price, type, stock, image, subtitle, description } = product;
   const q = {
@@ -54,15 +71,10 @@ export const createProduct = async (product) => {
       (name, price, type, stock, sold, image, subtitle, description)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *`,
-    values: [name, price, type, stock, 1, image, subtitle, description],
+    values: [name, price, type, stock, 0, image, subtitle, description],
   };
   return query(q.text, q.values);
 };
-
-
-
-
-
 
 /**
  * Update product by ID
