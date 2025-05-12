@@ -14,6 +14,7 @@ import {
   faCalendarAlt,
   faChartBar,
 } from "@fortawesome/free-solid-svg-icons";
+import { dashboardAPI } from "../../utils/api";
 
 const AdminDashboard = () => {
   const [dashboardData, setDashboardData] = useState({
@@ -33,6 +34,16 @@ const AdminDashboard = () => {
   const [error, setError] = useState(null);
   const [selectedTimeRange, setSelectedTimeRange] = useState("7d");
   const navigate = useNavigate();
+
+  // Helper function to format currency in IDR
+  const formatIDR = (amount) => {
+    return new Intl.NumberFormat("id-ID", {
+      style: "currency",
+      currency: "IDR",
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(amount);
+  };
 
   // Check if user is authenticated and is admin
   useEffect(() => {
@@ -58,95 +69,35 @@ const AdminDashboard = () => {
     const fetchDashboardData = async () => {
       try {
         setIsLoading(true);
+        setError(null);
 
-        // Simulate API calls - replace with actual API endpoints
-        const mockData = {
-          overview: {
-            totalUsers: 1245,
-            totalProducts: 89,
-            totalOrders: 567,
-            totalTransactions: 623,
-          },
-          ordersByStatus: [
-            { name: "Pending", value: 65, color: "#F59E0B", percentage: 19.4 },
-            {
-              name: "Processing",
-              value: 45,
-              color: "#3B82F6",
-              percentage: 13.4,
-            },
-            { name: "Shipped", value: 78, color: "#8B5CF6", percentage: 23.3 },
-            {
-              name: "Delivered",
-              value: 123,
-              color: "#10B981",
-              percentage: 36.7,
-            },
-            { name: "Cancelled", value: 23, color: "#EF4444", percentage: 6.9 },
-          ],
-          topProducts: [
-            { name: "Mountain Bike Pro", sold: 156, revenue: 234000 },
-            { name: "Road Racer Elite", sold: 134, revenue: 201000 },
-            { name: "Urban Commuter", sold: 98, revenue: 147000 },
-            { name: "BMX Freestyle", sold: 67, revenue: 100500 },
-            { name: "Electric Bike", sold: 45, revenue: 135000 },
-          ],
-          recentOrders: [
-            {
-              order_id: 1234,
-              customer: "John Doe",
-              email: "john@example.com",
-              product: "Mountain Bike Pro",
-              price: 1500,
-              status: "pending",
-              date: new Date().toISOString().slice(0, 10),
-            },
-            {
-              order_id: 1233,
-              customer: "Jane Smith",
-              email: "jane@example.com",
-              product: "Road Racer Elite",
-              price: 1200,
-              status: "processing",
-              date: new Date().toISOString().slice(0, 10),
-            },
-            {
-              order_id: 1232,
-              customer: "Bob Johnson",
-              email: "bob@example.com",
-              product: "Urban Commuter",
-              price: 800,
-              status: "shipped",
-              date: new Date().toISOString().slice(0, 10),
-            },
-          ],
-          salesTrend: [
-            { date: "Jan 1", sales: 15000, color: "#3B82F6" },
-            { date: "Jan 2", sales: 18000, color: "#3B82F6" },
-            { date: "Jan 3", sales: 22000, color: "#3B82F6" },
-            { date: "Jan 4", sales: 19000, color: "#3B82F6" },
-            { date: "Jan 5", sales: 25000, color: "#3B82F6" },
-            { date: "Jan 6", sales: 28000, color: "#3B82F6" },
-            { date: "Jan 7", sales: 24000, color: "#3B82F6" },
-          ],
-          lowStockProducts: [
-            { name: "Mountain Bike Pro", stock: 5, status: "critical" },
-            { name: "BMX Freestyle", stock: 12, status: "low" },
-            { name: "Electric Bike", stock: 8, status: "critical" },
-          ],
-        };
+        // Use the actual API call
+        const response = await dashboardAPI.getStats();
 
-        setDashboardData(mockData);
+        if (response.data.success) {
+          setDashboardData(response.data.data);
+        } else {
+          throw new Error(
+            response.data.message || "Failed to fetch dashboard data"
+          );
+        }
       } catch (error) {
         console.error("Error fetching dashboard data:", error);
-        setError("Failed to load dashboard data");
+        setError(
+          error.response?.data?.message || "Failed to load dashboard data"
+        );
+
+        // If authentication error, redirect to signin
+        if (error.response?.status === 401) {
+          navigate("/signin", { state: { returnUrl: "/admin/dashboard" } });
+        }
       } finally {
         setIsLoading(false);
       }
     };
 
     fetchDashboardData();
-  }, [selectedTimeRange]);
+  }, [selectedTimeRange, navigate]);
 
   const getStatusBadge = (status) => {
     const badges = {
@@ -157,6 +108,19 @@ const AdminDashboard = () => {
       cancelled: "bg-red-100 text-red-800",
     };
     return badges[status] || "bg-gray-100 text-gray-800";
+  };
+
+  // Calculate trend indicators based on actual data
+  const getTrendIndicator = (value) => {
+    // You might want to store previous period data to calculate actual trends
+    // For now, we'll use mock trends - replace with actual calculation later
+    const trends = {
+      users: { direction: "up", percentage: "+12%" },
+      products: { direction: "up", percentage: "+3" },
+      orders: { direction: "down", percentage: "-5%" },
+      transactions: { direction: "up", percentage: "+8%" },
+    };
+    return trends;
   };
 
   if (isLoading) {
@@ -173,13 +137,21 @@ const AdminDashboard = () => {
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <div className="bg-white p-8 rounded-lg shadow-md">
+        <div className="bg-white p-8 rounded-lg shadow-md max-w-md text-center">
           <h2 className="text-xl font-bold text-red-600 mb-4">Error</h2>
-          <p className="text-gray-700">{error}</p>
+          <p className="text-gray-700 mb-4">{error}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
   }
+
+  const trends = getTrendIndicator();
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -235,11 +207,19 @@ const AdminDashboard = () => {
               </div>
               <div className="flex items-center mt-4">
                 <FontAwesomeIcon
-                  icon={faArrowUp}
-                  className="text-green-500 text-sm mr-1"
+                  icon={
+                    trends.users.direction === "up" ? faArrowUp : faArrowDown
+                  }
+                  className={`text-${
+                    trends.users.direction === "up" ? "green" : "red"
+                  }-500 text-sm mr-1`}
                 />
-                <span className="text-green-600 text-sm">
-                  +12% from last month
+                <span
+                  className={`text-${
+                    trends.users.direction === "up" ? "green" : "red"
+                  }-600 text-sm`}
+                >
+                  {trends.users.percentage} from last month
                 </span>
               </div>
             </div>
@@ -266,7 +246,9 @@ const AdminDashboard = () => {
                   icon={faArrowUp}
                   className="text-green-500 text-sm mr-1"
                 />
-                <span className="text-green-600 text-sm">+3 new this week</span>
+                <span className="text-green-600 text-sm">
+                  {trends.products.percentage} new this week
+                </span>
               </div>
             </div>
 
@@ -292,7 +274,9 @@ const AdminDashboard = () => {
                   icon={faArrowDown}
                   className="text-red-500 text-sm mr-1"
                 />
-                <span className="text-red-600 text-sm">-5% from last week</span>
+                <span className="text-red-600 text-sm">
+                  {trends.orders.percentage} from last week
+                </span>
               </div>
             </div>
 
@@ -319,7 +303,7 @@ const AdminDashboard = () => {
                   className="text-green-500 text-sm mr-1"
                 />
                 <span className="text-green-600 text-sm">
-                  +8% from last month
+                  {trends.transactions.percentage} from last month
                 </span>
               </div>
             </div>
@@ -370,7 +354,8 @@ const AdminDashboard = () => {
                   const maxSales = Math.max(
                     ...dashboardData.salesTrend.map((s) => s.sales)
                   );
-                  const height = (item.sales / maxSales) * 100;
+                  const height =
+                    maxSales > 0 ? (item.sales / maxSales) * 100 : 0;
                   return (
                     <div
                       key={index}
@@ -379,7 +364,7 @@ const AdminDashboard = () => {
                       <div
                         className="w-full bg-blue-500 rounded-t transition-all duration-300"
                         style={{ height: `${height}%` }}
-                        title={`${item.date}: $${item.sales.toLocaleString()}`}
+                        title={`${item.date}: ${formatIDR(item.sales)}`}
                       ></div>
                       <div className="text-xs text-gray-600 mt-2 transform -rotate-45">
                         {item.date}
@@ -419,7 +404,7 @@ const AdminDashboard = () => {
                     </div>
                     <div className="text-right">
                       <p className="font-semibold text-green-600">
-                        ${product.revenue.toLocaleString()}
+                        {formatIDR(product.revenue)}
                       </p>
                       <p className="text-sm text-gray-600">Revenue</p>
                     </div>
@@ -460,7 +445,7 @@ const AdminDashboard = () => {
                       </div>
                       <div className="text-right">
                         <p className="font-semibold text-green-600">
-                          ${order.price}
+                          {formatIDR(order.price)}
                         </p>
                         <span
                           className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${getStatusBadge(

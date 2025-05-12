@@ -5,7 +5,7 @@ import OrderGrid from "../components/OrderGrid";
 import OrderDetail from "../components/OrderDetail";
 import { toast, ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
-import axios from "axios";
+import { orderAPI } from "../../utils/api";
 
 const OrderAdminPage = () => {
   // State management
@@ -58,27 +58,31 @@ const OrderAdminPage = () => {
     checkAuth();
   }, [navigate]);
 
-  // Fetch order statistics
+  // Fetch order statistics from real API
   const fetchOrderStats = useCallback(async () => {
     try {
       const token = localStorage.getItem("token");
       if (!token) return;
 
-      // In a real implementation, you'd have an API endpoint for order stats
-      // For now, we'll simulate this data
-      const mockStats = {
-        total: 150,
-        pending: 45,
-        processing: 30,
-        shipped: 25,
-        delivered: 40,
-        cancelled: 10,
-      };
-      setOrderStats(mockStats);
+      const response = await orderAPI.getStats();
+
+      if (response.data.success) {
+        setOrderStats(response.data.data);
+      } else {
+        console.error("Failed to fetch order stats:", response.data.message);
+        toast.error("Failed to fetch order statistics");
+      }
     } catch (err) {
       console.error("Error fetching order stats:", err);
+
+      // If authentication error, redirect to signin
+      if (err.response?.status === 401) {
+        navigate("/signin", { state: { returnUrl: "/admin/orders" } });
+      } else {
+        toast.error("Error fetching order statistics");
+      }
     }
-  }, []);
+  }, [navigate]);
 
   // Handle order selection
   const handleOrderSelect = useCallback((order) => {
@@ -93,17 +97,11 @@ const OrderAdminPage = () => {
     }
   }, []);
 
-  // Handle order status update
+  // Handle order status update using real API
   const handleOrderUpdate = useCallback(
     async (orderId, newStatus) => {
       try {
-        const token = localStorage.getItem("token");
-
-        const response = await axios.put(
-          `/api/orders/${orderId}/status`,
-          { status: newStatus },
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
+        const response = await orderAPI.updateOrderStatus(orderId, newStatus);
 
         if (response.data.success) {
           toast.success(`Order status updated to ${newStatus}`);
@@ -116,7 +114,7 @@ const OrderAdminPage = () => {
             }));
           }
 
-          // Trigger refresh of the order grid
+          // Trigger refresh of the order grid and stats
           setRefreshKey((key) => key + 1);
           fetchOrderStats();
         }
@@ -125,17 +123,101 @@ const OrderAdminPage = () => {
         const errorMessage =
           error.response?.data?.message || "Failed to update order status";
         toast.error(errorMessage);
+
+        // If authentication error, redirect to signin
+        if (error.response?.status === 401) {
+          navigate("/signin", { state: { returnUrl: "/admin/orders" } });
+        }
       }
     },
-    [selectedOrder, fetchOrderStats]
+    [selectedOrder, fetchOrderStats, navigate]
   );
 
-  // Handle bulk actions (future implementation)
-  const handleBulkAction = useCallback((action, orderIds) => {
-    // Placeholder for bulk actions like bulk approve, bulk ship, etc.
-    console.log(`Bulk ${action} for orders:`, orderIds);
-    toast.info(`Bulk ${action} feature coming soon!`);
-  }, []);
+  // Handle bulk actions using real API
+  const handleBulkAction = useCallback(
+    async (action, orderIds) => {
+      try {
+        const response = await orderAPI.bulkUpdateOrders(orderIds, action);
+
+        if (response.data.success) {
+          toast.success(response.data.message);
+          setRefreshKey((key) => key + 1);
+          fetchOrderStats();
+        }
+      } catch (error) {
+        console.error("Error with bulk action:", error);
+        const errorMessage =
+          error.response?.data?.message || `Failed to ${action} orders`;
+        toast.error(errorMessage);
+
+        if (error.response?.status === 401) {
+          navigate("/signin", { state: { returnUrl: "/admin/orders" } });
+        }
+      }
+    },
+    [fetchOrderStats, navigate]
+  );
+
+  // Handle order notes update
+  const handleUpdateNotes = useCallback(
+    async (orderId, notes) => {
+      try {
+        const response = await orderAPI.updateOrderNotes(orderId, notes);
+
+        if (response.data.success) {
+          toast.success("Order notes updated");
+
+          // Update selected order if it's the one that was updated
+          if (selectedOrder && selectedOrder.order_id === orderId) {
+            setSelectedOrder((prev) => ({
+              ...prev,
+              notes: notes,
+            }));
+          }
+        }
+      } catch (error) {
+        console.error("Error updating notes:", error);
+        toast.error("Failed to update order notes");
+
+        if (error.response?.status === 401) {
+          navigate("/signin", { state: { returnUrl: "/admin/orders" } });
+        }
+      }
+    },
+    [selectedOrder, navigate]
+  );
+
+  // Handle tracking number update
+  const handleUpdateTracking = useCallback(
+    async (orderId, trackingNumber) => {
+      try {
+        const response = await orderAPI.updateOrderTracking(
+          orderId,
+          trackingNumber
+        );
+
+        if (response.data.success) {
+          toast.success("Tracking number updated");
+
+          // Update selected order if it's the one that was updated
+          if (selectedOrder && selectedOrder.order_id === orderId) {
+            setSelectedOrder((prev) => ({
+              ...prev,
+              tracking_number: trackingNumber,
+            }));
+          }
+        }
+      } catch (error) {
+        console.error("Error updating tracking:", error);
+        toast.error("Failed to update tracking number");
+
+        if (error.response?.status === 401) {
+          navigate("/signin", { state: { returnUrl: "/admin/orders" } });
+        }
+      }
+    },
+    [selectedOrder, navigate]
+  );
 
   // If still checking auth, show loading
   if (isLoading) {
@@ -244,6 +326,8 @@ const OrderAdminPage = () => {
               <OrderDetail
                 order={selectedOrder}
                 onUpdateStatus={handleOrderUpdate}
+                onUpdateNotes={handleUpdateNotes}
+                onUpdateTracking={handleUpdateTracking}
               />
             </div>
           )}
@@ -267,6 +351,8 @@ const OrderAdminPage = () => {
               <OrderDetail
                 order={selectedOrder}
                 onUpdateStatus={handleOrderUpdate}
+                onUpdateNotes={handleUpdateNotes}
+                onUpdateTracking={handleUpdateTracking}
               />
             </div>
           )}

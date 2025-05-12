@@ -12,11 +12,12 @@ import {
   faCheckSquare,
   faSquare,
 } from "@fortawesome/free-solid-svg-icons";
+import { orderAPI } from "../../utils/api";
 
 const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
   const [orders, setOrders] = useState([]);
-  const [filteredOrders, setFilteredOrders] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortConfig, setSortConfig] = useState({
@@ -25,159 +26,71 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
   });
   const [selectedOrders, setSelectedOrders] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
+  const [pagination, setPagination] = useState({
+    total: 0,
+    totalPages: 1,
+    currentPage: 1,
+    limit: 10,
+  });
   const ordersPerPage = 10;
 
-  // Fetch orders
+  // Helper function to format currency in IDR
+  const formatIDR = (amount) => {
+    return new Intl.NumberFormat("id-ID", {
+      style: "currency",
+      currency: "IDR",
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(amount);
+  };
+
+  // Fetch orders from API
   const fetchOrders = useCallback(async () => {
     try {
       setIsLoading(true);
+      setError(null);
 
-      // Simulate API call - replace with actual API endpoint
-      const mockOrders = [
-        {
-          order_id: 1234,
-          customer: "John Doe",
-          email: "john@example.com",
-          product: "Mountain Bike Pro",
-          price: 1500,
-          status: "pending",
-          date: "2024-01-15",
-          phone_number: "+1234567890",
-          address: "123 Main St, City, State 12345",
-          quantity: 1,
-        },
-        {
-          order_id: 1233,
-          customer: "Jane Smith",
-          email: "jane@example.com",
-          product: "Road Racer Elite",
-          price: 1200,
-          status: "processing",
-          date: "2024-01-14",
-          phone_number: "+1234567891",
-          address: "456 Oak Ave, City, State 12345",
-          quantity: 1,
-        },
-        {
-          order_id: 1232,
-          customer: "Bob Johnson",
-          email: "bob@example.com",
-          product: "Urban Commuter",
-          price: 800,
-          status: "shipped",
-          date: "2024-01-13",
-          phone_number: "+1234567892",
-          address: "789 Pine Rd, City, State 12345",
-          quantity: 2,
-        },
-        {
-          order_id: 1231,
-          customer: "Alice Brown",
-          email: "alice@example.com",
-          product: "BMX Freestyle",
-          price: 600,
-          status: "delivered",
-          date: "2024-01-12",
-          phone_number: "+1234567893",
-          address: "321 Elm St, City, State 12345",
-          quantity: 1,
-        },
-        {
-          order_id: 1230,
-          customer: "Charlie Wilson",
-          email: "charlie@example.com",
-          product: "Electric Bike",
-          price: 2000,
-          status: "cancelled",
-          date: "2024-01-11",
-          phone_number: "+1234567894",
-          address: "654 Maple Dr, City, State 12345",
-          quantity: 1,
-        },
-      ];
+      const params = {
+        page: currentPage,
+        limit: ordersPerPage,
+        sortBy: sortConfig.key,
+        sortOrder: sortConfig.direction.toUpperCase(),
+      };
 
-      // Add more mock data for demonstration
-      for (let i = 1229; i >= 1200; i--) {
-        mockOrders.push({
-          order_id: i,
-          customer: `Customer ${i}`,
-          email: `customer${i}@example.com`,
-          product: `Product ${Math.floor(Math.random() * 5) + 1}`,
-          price: Math.floor(Math.random() * 1000) + 500,
-          status: [
-            "pending",
-            "processing",
-            "shipped",
-            "delivered",
-            "cancelled",
-          ][Math.floor(Math.random() * 5)],
-          date: `2024-01-${Math.floor(Math.random() * 30) + 1}`,
-          phone_number: `+123456789${i}`,
-          address: `${Math.floor(
-            Math.random() * 1000
-          )} Street St, City, State 12345`,
-          quantity: Math.floor(Math.random() * 3) + 1,
-        });
+      // Add filters only if they're not default values
+      if (statusFilter && statusFilter !== "all") {
+        params.status = statusFilter;
       }
 
-      setOrders(mockOrders);
+      if (searchTerm) {
+        params.search = searchTerm;
+      }
+
+      const response = await orderAPI.getOrders(params);
+
+      if (response.data.success) {
+        setOrders(response.data.data);
+        setPagination(response.data.pagination);
+      } else {
+        throw new Error(response.data.message || "Failed to fetch orders");
+      }
     } catch (error) {
       console.error("Error fetching orders:", error);
+      setError(error.response?.data?.message || "Failed to load orders");
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [currentPage, statusFilter, searchTerm, sortConfig]);
 
-  // Fetch orders on mount and when refreshKey changes
+  // Fetch orders on mount and when dependencies change
   useEffect(() => {
     fetchOrders();
   }, [fetchOrders, refreshKey]);
 
-  // Filter and search orders
+  // Reset page when filters change
   useEffect(() => {
-    let filtered = orders;
-
-    // Apply status filter
-    if (statusFilter !== "all") {
-      filtered = filtered.filter((order) => order.status === statusFilter);
-    }
-
-    // Apply search filter
-    if (searchTerm) {
-      filtered = filtered.filter(
-        (order) =>
-          order.customer.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          order.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          order.order_id.toString().includes(searchTerm) ||
-          order.product.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    }
-
-    // Apply sorting
-    filtered.sort((a, b) => {
-      let aValue = a[sortConfig.key];
-      let bValue = b[sortConfig.key];
-
-      if (sortConfig.key === "price") {
-        aValue = parseFloat(aValue);
-        bValue = parseFloat(bValue);
-      } else if (sortConfig.key === "date") {
-        aValue = new Date(aValue);
-        bValue = new Date(bValue);
-      }
-
-      if (aValue < bValue) {
-        return sortConfig.direction === "asc" ? -1 : 1;
-      }
-      if (aValue > bValue) {
-        return sortConfig.direction === "asc" ? 1 : -1;
-      }
-      return 0;
-    });
-
-    setFilteredOrders(filtered);
-    setCurrentPage(1); // Reset to first page when filters change
-  }, [orders, searchTerm, statusFilter, sortConfig]);
+    setCurrentPage(1);
+  }, [statusFilter, searchTerm]);
 
   // Handle sorting
   const handleSort = (key) => {
@@ -188,7 +101,7 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
     setSortConfig({ key, direction });
   };
 
-  // Handle selection
+  // Handle order selection
   const handleOrderSelect = (order) => {
     onSelect(order);
   };
@@ -206,10 +119,7 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
 
   // Handle select all
   const handleSelectAll = () => {
-    const currentPageOrders = getCurrentPageOrders();
-    const currentPageOrderIds = currentPageOrders.map(
-      (order) => order.order_id
-    );
+    const currentPageOrderIds = orders.map((order) => order.order_id);
 
     if (
       selectedOrders.length === currentPageOrderIds.length &&
@@ -220,16 +130,6 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
       setSelectedOrders(currentPageOrderIds);
     }
   };
-
-  // Get current page orders
-  const getCurrentPageOrders = () => {
-    const startIndex = (currentPage - 1) * ordersPerPage;
-    const endIndex = startIndex + ordersPerPage;
-    return filteredOrders.slice(startIndex, endIndex);
-  };
-
-  // Get total pages
-  const totalPages = Math.ceil(filteredOrders.length / ordersPerPage);
 
   // Status badge component
   const getStatusBadge = (status) => {
@@ -256,11 +156,35 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
     );
   };
 
+  // Handle search with debounce
+  const handleSearchChange = useCallback(
+    debounce((value) => {
+      setSearchTerm(value);
+    }, 500),
+    []
+  );
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
         <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
         <span className="ml-3">Loading orders...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <div className="text-center">
+          <div className="text-red-600 mb-4">Error: {error}</div>
+          <button
+            onClick={fetchOrders}
+            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
@@ -278,8 +202,7 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
             <input
               type="text"
               placeholder="Search orders..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => handleSearchChange(e.target.value)}
               className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -356,11 +279,11 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
                 </th>
                 <th
                   className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-700"
-                  onClick={() => handleSort("customer")}
+                  onClick={() => handleSort("name")}
                 >
                   <div className="flex items-center gap-1">
                     Customer
-                    {getSortIcon("customer")}
+                    {getSortIcon("name")}
                   </div>
                 </th>
                 <th
@@ -405,7 +328,7 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {getCurrentPageOrders().map((order) => (
+              {orders.map((order) => (
                 <tr key={order.order_id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <button
@@ -427,7 +350,7 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div>
                       <div className="text-sm font-medium text-gray-900">
-                        {order.customer}
+                        {order.name || order.customer}
                       </div>
                       <div className="text-sm text-gray-500">{order.email}</div>
                     </div>
@@ -436,7 +359,7 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
                     {order.product}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ${order.price}
+                    {formatIDR(order.price)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span
@@ -448,7 +371,7 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {order.date}
+                    {new Date(order.date).toLocaleDateString()}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                     <button
@@ -467,12 +390,15 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
       </div>
 
       {/* Pagination */}
-      {totalPages > 1 && (
+      {pagination.totalPages > 1 && (
         <div className="flex items-center justify-between">
           <div className="text-sm text-gray-600">
-            Showing {(currentPage - 1) * ordersPerPage + 1} to{" "}
-            {Math.min(currentPage * ordersPerPage, filteredOrders.length)} of{" "}
-            {filteredOrders.length} orders
+            Showing {(pagination.currentPage - 1) * pagination.limit + 1} to{" "}
+            {Math.min(
+              pagination.currentPage * pagination.limit,
+              pagination.total
+            )}{" "}
+            of {pagination.total} orders
           </div>
           <div className="flex gap-2">
             <button
@@ -482,22 +408,33 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
             >
               Previous
             </button>
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-              <button
-                key={page}
-                onClick={() => setCurrentPage(page)}
-                className={`px-3 py-1 border rounded text-sm ${
-                  currentPage === page
-                    ? "bg-blue-500 text-white border-blue-500"
-                    : "border-gray-300 hover:bg-gray-50"
-                }`}
-              >
-                {page}
-              </button>
-            ))}
+            {Array.from(
+              { length: Math.min(5, pagination.totalPages) },
+              (_, i) => {
+                const page = currentPage <= 3 ? i + 1 : currentPage - 2 + i;
+                if (page <= pagination.totalPages) {
+                  return (
+                    <button
+                      key={page}
+                      onClick={() => setCurrentPage(page)}
+                      className={`px-3 py-1 border rounded text-sm ${
+                        currentPage === page
+                          ? "bg-blue-500 text-white border-blue-500"
+                          : "border-gray-300 hover:bg-gray-50"
+                      }`}
+                    >
+                      {page}
+                    </button>
+                  );
+                }
+                return null;
+              }
+            )}
             <button
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
+              onClick={() =>
+                setCurrentPage((p) => Math.min(pagination.totalPages, p + 1))
+              }
+              disabled={currentPage === pagination.totalPages}
               className="px-3 py-1 border border-gray-300 rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
             >
               Next
@@ -508,5 +445,18 @@ const OrderGrid = ({ onSelect, refreshKey, onBulkAction }) => {
     </div>
   );
 };
+
+// Debounce function
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
 
 export default OrderGrid;
