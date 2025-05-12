@@ -10,11 +10,13 @@ import SignUp from "./assets/pages/SignUp";
 import Products from "./assets/pages/Products";
 import ProductAdminPage from "./assets/pages/ProductAdmin";
 import OrderHistory from "./assets/pages/OrderHistory";
+import OrderAdminPage from "./assets/pages/OrderAdminPage";
 import Cart from "./assets/components/Cart";
 import Checkout from "./assets/components/Checkout";
 import OrderConfirmation from "./assets/components/OrderConfirmation";
 import AdminRoute from "./utils/AdminRoutes";
 import { setupAuthInterceptors } from "./utils/auth";
+import AdminDashboard from "./assets/pages/AdminDashboard";
 
 function App() {
   const [showCart, setShowCart] = useState(false);
@@ -155,10 +157,26 @@ function App() {
 
         {/* Protected Admin routes - only accessible to admins */}
         <Route
+          path="/admin/dashboard"
+          element={
+            <AdminRoute>
+              <AdminDashboard />
+            </AdminRoute>
+          }
+        />
+        <Route
           path="/admin/products"
           element={
             <AdminRoute>
               <ProductAdminPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/orders"
+          element={
+            <AdminRoute>
+              <OrderAdminPage />
             </AdminRoute>
           }
         />

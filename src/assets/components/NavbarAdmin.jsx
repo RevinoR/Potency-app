@@ -143,11 +143,25 @@ const NavbarAdmin = () => {
         {/* Desktop Navigation */}
         <div className="hidden md:flex items-center space-x-8">
           <Link
+            to="/admin/dashboard"
+            className="text-gray-700 hover:text-amber-500 flex items-center"
+          >
+            <FontAwesomeIcon icon={faTachometerAlt} className="mr-2" />
+            <span>Dashboard</span>
+          </Link>
+          <Link
             to="/admin/products"
             className="text-gray-700 hover:text-amber-500 flex items-center"
           >
             <FontAwesomeIcon icon={faBox} className="mr-2" />
             <span>Products</span>
+          </Link>
+          <Link
+            to="/admin/orders"
+            className="text-gray-700 hover:text-amber-500 flex items-center"
+          >
+            <FontAwesomeIcon icon={faList} className="mr-2" />
+            <span>Orders</span>
           </Link>
           <Link
             to="/"
@@ -175,13 +189,6 @@ const NavbarAdmin = () => {
             {/* Dropdown Menu */}
             {isDropdownOpen && (
               <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-10">
-                <Link
-                  to="/admin/dashboard"
-                  className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                >
-                  <FontAwesomeIcon icon={faTachometerAlt} className="mr-2" />
-                  Dashboard
-                </Link>
                 <button
                   onClick={handleLogout}
                   className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100"
@@ -218,6 +225,17 @@ const NavbarAdmin = () => {
               </div>
             </div>
 
+            <Link
+              to="/admin/dashboard"
+              className="text-gray-700 hover:text-amber-500 py-2 flex items-center"
+              onClick={() => setIsMobileMenuOpen(false)}
+            >
+              <FontAwesomeIcon
+                icon={faTachometerAlt}
+                className="mr-3 w-5 text-center"
+              />
+              <span>Dashboard</span>
+            </Link>
             <Link
               to="/admin/products"
               className="text-gray-700 hover:text-amber-500 py-2 flex items-center"
